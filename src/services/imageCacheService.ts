@@ -35,6 +35,7 @@ import {
   markFsKeyMigrationDone,
   markReconcileRan,
 } from '../store/imageCacheStore';
+import { connectivityStore } from '../store/connectivityStore';
 import { offlineModeStore } from '../store/offlineModeStore';
 import { fireAndForget } from '../utils/fireAndForget';
 import {
@@ -50,6 +51,7 @@ import {
   upsertCachedImage,
   type CacheBrowserFilter,
 } from '../store/persistence/imageCacheTable';
+import { awaitFirstPing } from './connectivityService';
 import { logImageCache } from './imageCacheLogger';
 import {
   ensureCoverArtAuth,
@@ -157,19 +159,34 @@ function evictUriCacheForCover(coverArtId: string): void {
 }
 
 /**
- * Per-session consecutive failure counts for source-image (600px)
- * downloads. After MAX_SOURCE_FAILURES in a row we purge the rows + files
- * for that coverArtId so the "incomplete" count actually reaches zero
- * rather than re-queuing forever. Reset on success; cleared on app
- * restart so transient issues self-heal on the next launch.
+ * Gate for "is it safe to forcibly delete a cache row right now?"
+ * True only when we have positive signal that the server is responding
+ * normally — so a failure we just observed can be confidently attributed
+ * to the row itself rather than to the network path. Used at every
+ * decision point that would otherwise purge a row based on an observed
+ * failure.
+ *
+ * False when:
+ *   - User is in offline mode (we agreed not to talk to the server).
+ *   - Internet is reported unreachable by NetInfo.
+ *   - Server is reported unreachable by the connectivity ping.
+ *
+ * If we observed an HTTP response from the server (any status), the
+ * server proved itself responsive in that exact moment — but we still
+ * route through this gate to err on the side of preserving rows when
+ * the connectivity store disagrees.
  */
-const sourceFailureCount = new Map<string, number>();
-const MAX_SOURCE_FAILURES = 3;
+function isPurgeAllowedNow(): boolean {
+  const conn = connectivityStore.getState();
+  const offline = offlineModeStore.getState().offlineMode;
+  return !offline && conn.isInternetReachable && conn.isServerReachable;
+}
 
 /**
  * Delete every on-disk variant and DB row for a coverArtId, and evict
- * its URI-cache entries. Used by the sentinel sweep and the source-
- * download circuit breaker (404 or N× failure).
+ * its URI-cache entries. Used by the sentinel sweep, the 404 short-
+ * circuit, the source-download connectivity-gated purge, and the
+ * variant-resize threshold purge.
  */
 function purgeCoverArtRows(coverArtId: string): { files: number } {
   const result = deleteCachedImagesForCoverArt(coverArtId);
@@ -189,7 +206,7 @@ function purgeCoverArtRows(coverArtId: string): { files: number } {
     /* best-effort — DB is the source of truth */
   }
   for (const s of IMAGE_SIZES) uriCache.delete(uriCacheKey(coverArtId, s));
-  sourceFailureCount.delete(coverArtId);
+  variantFailureCount.delete(coverArtId);
   return { files: result.count };
 }
 
@@ -324,7 +341,18 @@ export function initImageCache(): void {
     if (!appStateSubscription) {
       appStateSubscription = AppState.addEventListener('change', (next: AppStateStatus) => {
         if (next === 'active') {
-          fireAndForget(repairIncompleteImagesAsync('appstate-active'), 'imageCache.appStateActive');
+          // Wait for the post-resume ping result so the repair pass uses
+          // confirmed connectivity state. AppState 'active' triggers a
+          // ping in connectivityService; we await its outcome here.
+          fireAndForget(
+            (async () => {
+              if (offlineModeStore.getState().offlineMode) return;
+              await awaitFirstPing();
+              if (offlineModeStore.getState().offlineMode) return;
+              await repairIncompleteImagesAsync('appstate-active');
+            })(),
+            'imageCache.appStateActive',
+          );
         }
       });
     }
@@ -397,11 +425,25 @@ export function deferredImageCacheInit(): Promise<void> {
         if (shouldRunReconcile()) {
           await reconcileImageCacheAsync('startup');
         }
-        // Skip repair when offline — queuing downloads against a network
-        // we can't reach would just churn until each retry exhausts. The
-        // offline→online subscriber below picks it up when we reconnect.
+
+        // Repair is non-blocking from here. The startup chain in
+        // _layout.tsx awaits this function before running music cache
+        // init and data sync init — gating those on connectivity would
+        // be wrong. Spin off the repair so the home screen renders
+        // immediately and repair runs silently once the connectivity
+        // service has produced its first definitive ping result.
         if (!offlineModeStore.getState().offlineMode) {
-          await repairIncompleteImagesAsync('startup');
+          fireAndForget(
+            (async () => {
+              await awaitFirstPing();
+              // Re-check offline mode in case the user toggled it during
+              // the wait. Belt-and-braces: isPurgeAllowedNow() also
+              // checks per-failure inside the repair pass.
+              if (offlineModeStore.getState().offlineMode) return;
+              await repairIncompleteImagesAsync('startup');
+            })(),
+            'imageCache.startupRepair',
+          );
         }
       } finally {
         // Always resolve — this is a best-effort init, same contract as
@@ -420,7 +462,17 @@ offlineModeStore.subscribe((state, prev) => {
   if (state.offlineMode === prev.offlineMode) return;
   if (state.offlineMode) return;
   if (imageCacheStore.getState().incompleteCount <= 0) return;
-  fireAndForget(repairIncompleteImagesAsync('offline-resume'), 'imageCache.offlineResume');
+  // _layout.tsx restarts connectivity monitoring on offline→online; wait
+  // for the first post-resume ping so the repair pass acts on confirmed
+  // server state rather than the optimistic default.
+  fireAndForget(
+    (async () => {
+      await awaitFirstPing();
+      if (offlineModeStore.getState().offlineMode) return;
+      await repairIncompleteImagesAsync('offline-resume');
+    })(),
+    'imageCache.offlineResume',
+  );
 });
 
 /**
@@ -991,45 +1043,67 @@ async function downloadSourceImage(
   const url = getCoverArtUrl(coverArtId, SOURCE_SIZE);
   if (!url) {
     // Null URL means offline, missing auth, or a sentinel slipped past
-    // the upstream guards. Don't count this against the failure budget:
-    // offline/auth issues are transient by nature and should recover
-    // when the user comes back online.
+    // the upstream guards. Treated as transient — the row is preserved
+    // for a later attempt once we're back online / authenticated.
     return null;
   }
 
-  let tmpName: string | null = null;
+  // Transport phase: any throw here is a network/DNS/TLS failure with no
+  // Response — server-reachability is unknown, so the row must be
+  // preserved. Connectivity service surfaces the outage separately.
+  let response: Awaited<ReturnType<typeof fetch>>;
   try {
     logImageCache(`download id=${coverArtId} start url=${url}`);
-    const response = await fetch(url);
-    if (!response.ok) {
-      if (response.status === 404) {
-        // Definitive server signal that this cover doesn't exist
-        // (album removed, re-indexed with a new ID, etc.). Re-requesting
-        // the same URL every launch is pure churn — purge immediately
-        // so the "incomplete" count actually reaches zero. The cover
-        // will re-populate naturally if the user navigates to the
-        // album again and CachedImage calls cacheAllSizes.
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[imageCacheService] 404 for coverArt=${coverArtId} — purging cache rows`,
-        );
-        logImageCache(`download id=${coverArtId} 404 purge`);
-        purgeCoverArtRows(coverArtId);
-        return null;
-      }
-      // Other non-OK statuses (5xx, 403, etc.) count toward the failure
-      // budget. Transient issues (one 503, single timeout) don't cost
-      // anything; persistent ones eventually purge.
-      logImageCache(`download id=${coverArtId} status=${response.status} fail`);
-      bumpSourceFailure(coverArtId);
+    response = await fetch(url);
+  } catch (e) {
+    logImageCache(
+      `download id=${coverArtId} transport-error preserved err=${e instanceof Error ? e.message : String(e)}`,
+    );
+    return null;
+  }
+
+  // Server responded. From here on, any failure is server-side or local-
+  // pipeline — both purge under the connectivity gate.
+  if (!response.ok) {
+    if (response.status === 404) {
+      // Definitive server signal that this cover doesn't exist (album
+      // removed, re-indexed with a new ID, etc.). Always purge — 404 is
+      // unambiguous regardless of broader connectivity state.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[imageCacheService] 404 for coverArt=${coverArtId} — purging cache rows`,
+      );
+      logImageCache(`download id=${coverArtId} 404 purge`);
+      purgeCoverArtRows(coverArtId);
       return null;
     }
+    if (isPurgeAllowedNow()) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[imageCacheService] HTTP ${response.status} for coverArt=${coverArtId} — purging cache rows`,
+      );
+      logImageCache(
+        `download id=${coverArtId} status=${response.status} purge connectivity=ok`,
+      );
+      purgeCoverArtRows(coverArtId);
+    } else {
+      logImageCache(
+        `download id=${coverArtId} status=${response.status} preserved connectivity=down`,
+      );
+    }
+    return null;
+  }
 
-    const contentType = response.headers.get('content-type') ?? '';
-    const ext = MIME_TO_EXT[contentType.split(';')[0].trim()] ?? '.jpg';
-    const fileName = `${SOURCE_SIZE}${ext}`;
-    tmpName = `${fileName}.tmp`;
+  // I/O phase: bytes arrived from the server; persist them locally. A
+  // throw here means disk full / permission denied / write race. The
+  // server is responsive, so under the connectivity gate we purge to
+  // keep the row from churning forever on a poisoned local state.
+  const contentType = response.headers.get('content-type') ?? '';
+  const ext = MIME_TO_EXT[contentType.split(';')[0].trim()] ?? '.jpg';
+  const fileName = `${SOURCE_SIZE}${ext}`;
+  const tmpName = `${fileName}.tmp`;
 
+  try {
     const tmpFile = new File(subDir, tmpName);
     const bytes = new Uint8Array(await response.arrayBuffer());
     tmpFile.write(bytes);
@@ -1052,50 +1126,36 @@ async function downloadSourceImage(
     });
     uriCache.set(uriCacheKey(coverArtId, SOURCE_SIZE), dest.uri);
 
-    // Success — wipe any accumulated failure count.
-    sourceFailureCount.delete(coverArtId);
     logImageCache(`download id=${coverArtId} ok bytes=${bytes.length} ext=${ext.slice(1)}`);
-
     return dest.uri;
   } catch (e) {
-    if (tmpName) {
-      const tmp = new File(subDir, tmpName);
-      if (tmp.exists) {
-        try { tmp.delete(); } catch { /* best-effort */ }
-      }
+    const tmp = new File(subDir, tmpName);
+    if (tmp.exists) {
+      try { tmp.delete(); } catch { /* best-effort */ }
     }
-    // Network error, JSON parse, etc. — transient; count it.
-    logImageCache(`download id=${coverArtId} threw=${e instanceof Error ? e.message : String(e)}`);
-    bumpSourceFailure(coverArtId);
+    if (isPurgeAllowedNow()) {
+      logImageCache(
+        `download id=${coverArtId} io-error purge connectivity=ok err=${e instanceof Error ? e.message : String(e)}`,
+      );
+      purgeCoverArtRows(coverArtId);
+    } else {
+      logImageCache(
+        `download id=${coverArtId} io-error preserved connectivity=down err=${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
     return null;
   }
 }
 
 /**
- * Increment the per-coverArt in-session failure counter and purge the
- * rows if we've hit {@link MAX_SOURCE_FAILURES}. Keeps the "incomplete"
- * count from stagnating on covers the server repeatedly refuses to
- * serve (403, 5xx, sustained timeouts).
- */
-function bumpSourceFailure(coverArtId: string): void {
-  const next = (sourceFailureCount.get(coverArtId) ?? 0) + 1;
-  sourceFailureCount.set(coverArtId, next);
-  logImageCache(`bumpSourceFailure id=${coverArtId} count=${next}/${MAX_SOURCE_FAILURES}`);
-  if (next >= MAX_SOURCE_FAILURES) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[imageCacheService] ${next} consecutive failures for coverArt=${coverArtId} — purging cache rows`,
-    );
-    logImageCache(`bumpSourceFailure id=${coverArtId} threshold-purge`);
-    purgeCoverArtRows(coverArtId);
-  }
-}
-
-/**
- * Coverages where variant generation has failed repeatedly during this
- * app session. We stop retrying so a persistent per-cover decode bug
- * (e.g. corrupt 600 source) can't produce an unbounded loop on re-entry.
- * Resets on app restart — transient issues self-heal.
+ * Per-session resize-failure counter. Variant generation runs against
+ * bytes already on disk — the connectivity gate doesn't apply because
+ * no network is involved. A small in-session retry budget absorbs
+ * transient memory pressure during decode (older Android, low-RAM
+ * devices). On the threshold strike, the row is purged: source bytes
+ * are most likely corrupt or in an unsupported format, and re-running
+ * the same decode would just re-fail. Counter resets on success or
+ * after a purge so a fresh download can be evaluated cleanly.
  */
 const variantFailureCount = new Map<string, number>();
 const MAX_VARIANT_FAILURES = 3;
@@ -1114,8 +1174,6 @@ async function generateResizedVariant(
   size: number,
   subDir: Directory,
 ): Promise<void> {
-  if ((variantFailureCount.get(coverArtId) ?? 0) >= MAX_VARIANT_FAILURES) return;
-
   const fileName = `${size}.jpg`;
   const tmpName = `${fileName}.tmp`;
   const tmpFile = new File(subDir, tmpName);
@@ -1152,6 +1210,14 @@ async function generateResizedVariant(
     );
     if (tmpFile.exists) {
       try { tmpFile.delete(); } catch { /* best-effort */ }
+    }
+    if (next >= MAX_VARIANT_FAILURES) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[imageCacheService] ${next} consecutive resize failures for coverArt=${coverArtId} — purging cache rows`,
+      );
+      logImageCache(`resize id=${coverArtId} threshold-purge`);
+      purgeCoverArtRows(coverArtId);
     }
   }
 }
@@ -1317,8 +1383,9 @@ export async function refreshCachedImage(
     imageCacheStore.getState().recalculateFromDb();
     resolveWaiters(coverArtId);
     const present = IMAGE_SIZES.filter((s) => getCachedImageUri(coverArtId, s) != null);
+    const stillInDb = dbHasCachedImage(coverArtId, SOURCE_SIZE);
     logImageCache(
-      `refreshCachedImage end id=${coverArtId} sizes-present=[${present.join(',')}]`,
+      `refreshCachedImage end id=${coverArtId} sizes-present=[${present.join(',')}] still-in-db=${stillInDb}`,
     );
   }
 }

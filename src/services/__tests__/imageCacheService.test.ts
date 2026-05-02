@@ -129,6 +129,38 @@ jest.mock('../../store/offlineModeStore', () => ({
   },
 }));
 
+const mockConnectivity = {
+  isInternetReachable: true,
+  isServerReachable: true,
+};
+jest.mock('../../store/connectivityStore', () => ({
+  connectivityStore: {
+    getState: jest.fn(() => mockConnectivity),
+  },
+}));
+
+const mockAwaitFirstPing = jest.fn(() => Promise.resolve());
+jest.mock('../connectivityService', () => ({
+  awaitFirstPing: () => mockAwaitFirstPing(),
+}));
+
+/**
+ * Helper: configure connectivity + offline state for a test case.
+ * `purgeAllowed` semantics:
+ *   { offlineMode: false, isInternetReachable: true, isServerReachable: true }
+ *      → isPurgeAllowedNow() === true (definitive failures purge)
+ *   anything else → preserves rows (failures treated as transient)
+ */
+function setConnectivity(opts: {
+  offlineMode?: boolean;
+  isInternetReachable?: boolean;
+  isServerReachable?: boolean;
+}) {
+  if (opts.offlineMode != null) mockOfflineMode.offlineMode = opts.offlineMode;
+  if (opts.isInternetReachable != null) mockConnectivity.isInternetReachable = opts.isInternetReachable;
+  if (opts.isServerReachable != null) mockConnectivity.isServerReachable = opts.isServerReachable;
+}
+
 jest.mock('../../store/imageCacheStore', () => ({
   imageCacheStore: {
     getState: jest.fn(() => ({
@@ -250,6 +282,21 @@ const { fetch: mockFetch } = jest.requireMock('expo/fetch') as { fetch: jest.Moc
 // default success behaviour with mockRejectedValueOnce / mockImplementationOnce.
 
 /**
+ * Flush enough microtasks/macrotasks to let any spawned `fireAndForget`
+ * promise chain complete. Used by tests that drive `deferredImageCacheInit`
+ * and need to observe the post-await repair pass that's been moved to a
+ * non-blocking spawned task in the production code.
+ */
+async function flushSpawned(): Promise<void> {
+  // Two setImmediate rounds is sufficient: the first lets the spawned
+  // chain's first await (awaitFirstPing) progress past the boundary; the
+  // second lets the inner await chain inside repairIncompleteImagesAsync
+  // settle.
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
  * Helper: build the internal mock `_name` key for a subdirectory under image-cache.
  * Mirrors the mock Directory constructor chaining from Paths.document → image-cache → id.
  */
@@ -302,6 +349,12 @@ beforeEach(() => {
   (stripCoverArtSuffix as jest.Mock).mockImplementation((id: string) => id.replace(/_[0-9a-f]+$/, ''));
   // Default: empty directory walks for reconcile + recover passes.
   mockListDirectoryAsync.mockResolvedValue([]);
+  // Default connectivity: server reachable, internet reachable, not offline
+  // → isPurgeAllowedNow() returns true so failures purge as the user spec
+  // requires. Tests that need the preserve-row path call setConnectivity().
+  setConnectivity({ offlineMode: false, isInternetReachable: true, isServerReachable: true });
+  mockAwaitFirstPing.mockClear();
+  mockAwaitFirstPing.mockResolvedValue(undefined);
   initImageCache();
 });
 
@@ -703,6 +756,10 @@ describe('repairIncompleteImagesAsync', () => {
     mockFileExistsMap.set(fileMockName(id, '300.jpg.tmp'), true);
 
     await deferredImageCacheInit();
+    // Repair is now non-blocking from deferredImageCacheInit — it spawns
+    // and awaits awaitFirstPing before running. Flush the spawned chain
+    // so the assertions below see its side effects.
+    await flushSpawned();
 
     // Both walks ran — at minimum the top-level dir and one subdir per walk.
     expect(mockListDirectoryAsync).toHaveBeenCalled();
@@ -902,28 +959,49 @@ describe('generateResizedVariant — catch with existing tmp (line 454)', () => 
   });
 });
 
-describe('generateResizedVariant — 3-failure circuit breaker', () => {
-  it('stops calling resize for a cover after three consecutive failures', async () => {
+describe('generateResizedVariant — 3-failure circuit breaker purges row', () => {
+  it('purges the cover after three consecutive resize failures', async () => {
     const id = 'repeat-fail';
 
     mockDirExistsMap.set(subDirName(id), true);
     mockFileExistsMap.set(fileMockName(id, '600.jpg'), true);
+    seedDbRow({ coverArtId: id, size: 600 });
     for (const s of IMAGE_SIZES) evictUriCacheEntry(id, s);
 
     mockResizeImageToFileAsync.mockRejectedValue(new Error('persistent decode failure'));
 
-    // Each cacheAllSizes pass attempts 3 resizes (300/150/50). After the
-    // first pass the failure counter hits 3; subsequent passes must skip.
+    // Each cacheAllSizes pass attempts 3 resizes (300/150/50). The third
+    // failure trips the threshold and triggers purgeCoverArtRows — the
+    // 600.jpg + DB row are wiped so re-entry runs against a fresh state.
     await cacheAllSizes(id);
+
     expect(mockResizeImageToFileAsync).toHaveBeenCalledTimes(3);
+    expect(mockDeleteCachedImagesForCoverArt).toHaveBeenCalledWith(id);
+    expect(mockDbRows.has(mockDbKey(id, 600))).toBe(false);
+    expect(mockFileExistsMap.get(fileMockName(id, '600.jpg'))).toBeFalsy();
+  });
 
-    mockResizeImageToFileAsync.mockClear();
-    // Evict uriCache so cacheAllSizes believes the variants are still missing
-    // and tries to regenerate them.
+  it('does not purge when failures stay below the threshold', async () => {
+    const id = 'two-then-success';
+
+    mockDirExistsMap.set(subDirName(id), true);
+    mockFileExistsMap.set(fileMockName(id, '600.jpg'), true);
+    seedDbRow({ coverArtId: id, size: 600 });
     for (const s of IMAGE_SIZES) evictUriCacheEntry(id, s);
+
+    // Fail twice then succeed — counter never reaches MAX_VARIANT_FAILURES
+    // and is reset on success.
+    let calls = 0;
+    mockResizeImageToFileAsync.mockImplementation(async (_src, targetUri) => {
+      calls++;
+      if (calls <= 2) throw new Error('transient pressure');
+      mockFileExistsMap.set(targetUri.replace(/^file:\/\//, ''), true);
+    });
+
     await cacheAllSizes(id);
 
-    expect(mockResizeImageToFileAsync).not.toHaveBeenCalled();
+    expect(mockDeleteCachedImagesForCoverArt).not.toHaveBeenCalledWith(id);
+    expect(mockDbRows.has(mockDbKey(id, 600))).toBe(true);
   });
 });
 
@@ -1171,6 +1249,9 @@ describe('deferredImageCacheInit — throttle + idle deferral', () => {
     mockFindIncompleteCovers.mockReturnValueOnce(['album-needs-repair']);
 
     await deferredImageCacheInit();
+    // Repair runs as a spawned task gated on awaitFirstPing — flush so
+    // its side effects are visible to the assertion.
+    await flushSpawned();
 
     // Repair's SQL query fired even though reconcile was throttled.
     expect(mockFindIncompleteCovers).toHaveBeenCalled();
@@ -1181,8 +1262,34 @@ describe('deferredImageCacheInit — throttle + idle deferral', () => {
     mockOfflineMode.offlineMode = true;
 
     await deferredImageCacheInit();
+    await flushSpawned();
 
     expect(mockFindIncompleteCovers).not.toHaveBeenCalled();
+  });
+
+  it('does not block deferred init on the repair pass (non-blocking startup)', async () => {
+    // awaitFirstPing held in a never-resolved promise — repair must NOT
+    // run until it resolves, but deferredImageCacheInit must still return
+    // immediately so the startup chain (music cache, data sync) proceeds.
+    mockGetLastReconcileMs.mockReturnValue(Date.now() - 1000);
+    mockOfflineMode.offlineMode = false;
+    mockFindIncompleteCovers.mockReturnValueOnce(['album-needs-repair']);
+
+    let releaseFirstPing!: () => void;
+    mockAwaitFirstPing.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releaseFirstPing = resolve; }),
+    );
+
+    await deferredImageCacheInit();
+    // Even after a microtask flush, repair has not started because
+    // awaitFirstPing hasn't resolved.
+    await flushSpawned();
+    expect(mockFindIncompleteCovers).not.toHaveBeenCalled();
+
+    // Release the gate; repair runs.
+    releaseFirstPing();
+    await flushSpawned();
+    expect(mockFindIncompleteCovers).toHaveBeenCalled();
   });
 
   it('writes the timestamp on a successful reconcile via deferred init', async () => {
@@ -1307,10 +1414,12 @@ describe('sentinel cover-art IDs — sweep + guards', () => {
 
   it('repairIncompleteImagesAsync sweeps sentinels before classifying outcomes', async () => {
     // 2 sentinel rows (incomplete) + 1 real incomplete that will fail to fetch.
+    // Connectivity is down so the 500 stays as `failed` rather than being
+    // purged — we want this test to exercise the failed-classification path
+    // alongside the sentinel sweep.
+    setConnectivity({ isServerReachable: false });
     seedDbRow({ coverArtId: STARRED, size: 600 });
     seedDbRow({ coverArtId: VARIOUS, size: 600 });
-    // A real album row — mock fetch returns 500 so the download fails
-    // (no 3× yet — just one attempt in this pass).
     seedDbRow({ coverArtId: 'al-realbum', size: 600 });
     mockFetch.mockResolvedValue({
       ok: false,
@@ -1323,7 +1432,8 @@ describe('sentinel cover-art IDs — sweep + guards', () => {
 
     // Sentinels don't show up in `queued` (they're swept before the snapshot).
     expect(outcome.queued).toBe(1);
-    // The real album failed to fetch → still incomplete → failed.
+    // The real album failed to fetch under a closed connectivity gate →
+    // still incomplete → failed.
     expect(outcome.failed).toBe(1);
     // Both sentinel coverArtIds removed (each had 1 file → 1 coverArtId each).
     expect(outcome.removed).toBe(2);
@@ -1342,11 +1452,7 @@ describe('sentinel cover-art IDs — sweep + guards', () => {
 /*  Source-download circuit breaker                                    */
 /* ------------------------------------------------------------------ */
 
-describe('downloadSourceImage — 404 and 3× failure circuit breaker', () => {
-  function fileName(coverArtId: string, size: number, ext = 'jpg'): string {
-    return fileMockName(coverArtId, `${size}.${ext}`);
-  }
-
+describe('downloadSourceImage — connectivity-gated purge', () => {
   it('purges cache rows immediately when the server returns 404', async () => {
     seedDbRow({ coverArtId: 'dead-album', size: 600 });
     mockFetch.mockResolvedValueOnce({
@@ -1362,84 +1468,110 @@ describe('downloadSourceImage — 404 and 3× failure circuit breaker', () => {
     expect(mockDbRows.has(mockDbKey('dead-album', 600))).toBe(false);
   });
 
-  it('purges cache rows after 3 consecutive non-404 failures', async () => {
-    seedDbRow({ coverArtId: 'flaky-album', size: 600 });
-
-    // Three 500 responses — the 3rd trips the breaker.
-    mockFetch.mockResolvedValue({
+  it('purges 404 even when connectivity store says server is unreachable', async () => {
+    // 404 is unambiguous — we got a definitive server response that this
+    // cover does not exist. The connectivity-store gate doesn't apply.
+    setConnectivity({ isServerReachable: false });
+    seedDbRow({ coverArtId: 'dead-album', size: 600 });
+    mockFetch.mockResolvedValueOnce({
       ok: false,
-      status: 500,
+      status: 404,
       headers: { get: () => 'image/jpeg' },
       arrayBuffer: async () => new ArrayBuffer(0),
     });
 
-    await cacheAllSizes('flaky-album');
-    expect(mockDeleteCachedImagesForCoverArt).not.toHaveBeenCalledWith('flaky-album');
-    await cacheAllSizes('flaky-album');
-    expect(mockDeleteCachedImagesForCoverArt).not.toHaveBeenCalledWith('flaky-album');
-    await cacheAllSizes('flaky-album');
-    expect(mockDeleteCachedImagesForCoverArt).toHaveBeenCalledWith('flaky-album');
+    await cacheAllSizes('dead-album');
+
+    expect(mockDeleteCachedImagesForCoverArt).toHaveBeenCalledWith('dead-album');
   });
 
-  it('resets the failure counter after a successful download', async () => {
-    seedDbRow({ coverArtId: 'sometimes-album', size: 600 });
-
-    /**
-     * Before each cacheAllSizes call, purge any on-disk variants so
-     * getCachedImageUri returns null for all 4 sizes → cacheAllSizes
-     * always takes the download path (not the all-cached short-circuit).
-     */
-    const purgeFs = () => {
-      for (const size of [50, 150, 300, 600]) {
-        for (const ext of ['jpg', 'png', 'webp']) {
-          mockFileExistsMap.delete(fileName('sometimes-album', size, ext));
-        }
-        evictUriCacheEntry('sometimes-album', size);
-      }
-    };
-
-    // Have the success step's fetch return bytes, and the successful
-    // resize step write out the variant files. Any call to fetch after
-    // the one success (below) falls into the persistent 500 default.
-    mockFetch.mockResolvedValue({
+  it('purges immediately on a non-404 HTTP error when connectivity is healthy', async () => {
+    seedDbRow({ coverArtId: 'flaky-album', size: 600 });
+    mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 500,
       headers: { get: () => 'image/jpeg' },
       arrayBuffer: async () => new ArrayBuffer(0),
     });
-    mockResizeImageToFileAsync.mockImplementation(async (_src: string, targetUri: string) => {
-      mockFileExistsMap.set(targetUri.replace(/^file:\/\//, ''), true);
+
+    await cacheAllSizes('flaky-album');
+
+    expect(mockDeleteCachedImagesForCoverArt).toHaveBeenCalledWith('flaky-album');
+    expect(mockDbRows.has(mockDbKey('flaky-album', 600))).toBe(false);
+  });
+
+  it('preserves the row on non-404 HTTP error when offline mode is on', async () => {
+    setConnectivity({ offlineMode: true });
+    seedDbRow({ coverArtId: 'flaky-album', size: 600 });
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      headers: { get: () => 'image/jpeg' },
+      arrayBuffer: async () => new ArrayBuffer(0),
     });
 
-    purgeFs();
-    await cacheAllSizes('sometimes-album');  // fail 1 (counter → 1)
-    expect(mockDeleteCachedImagesForCoverArt).not.toHaveBeenCalledWith('sometimes-album');
+    await cacheAllSizes('flaky-album');
 
-    purgeFs();
-    await cacheAllSizes('sometimes-album');  // fail 2 (counter → 2)
-    expect(mockDeleteCachedImagesForCoverArt).not.toHaveBeenCalledWith('sometimes-album');
+    expect(mockDeleteCachedImagesForCoverArt).not.toHaveBeenCalledWith('flaky-album');
+    expect(mockDbRows.has(mockDbKey('flaky-album', 600))).toBe(true);
+  });
 
-    // One-shot success: consumes the next fetch only.
-    purgeFs();
+  it('preserves the row on non-404 HTTP error when server is reported unreachable', async () => {
+    setConnectivity({ isServerReachable: false });
+    seedDbRow({ coverArtId: 'flaky-album', size: 600 });
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      headers: { get: () => 'image/jpeg' },
+      arrayBuffer: async () => new ArrayBuffer(0),
+    });
+
+    await cacheAllSizes('flaky-album');
+
+    expect(mockDeleteCachedImagesForCoverArt).not.toHaveBeenCalledWith('flaky-album');
+    expect(mockDbRows.has(mockDbKey('flaky-album', 600))).toBe(true);
+  });
+
+  it('preserves the row when fetch throws a transport error', async () => {
+    // No Response received → server-reachability is unknown. The row
+    // must be preserved regardless of what the connectivity store says
+    // (the store may not yet have updated to reflect the outage).
+    seedDbRow({ coverArtId: 'unreachable-album', size: 600 });
+    mockFetch.mockRejectedValueOnce(new Error('Network request failed'));
+
+    await cacheAllSizes('unreachable-album');
+
+    expect(mockDeleteCachedImagesForCoverArt).not.toHaveBeenCalledWith('unreachable-album');
+    expect(mockDbRows.has(mockDbKey('unreachable-album', 600))).toBe(true);
+  });
+
+  it('purges on file-IO error after a successful response when connectivity is healthy', async () => {
+    // Server returned bytes; tmpFile.write throws (disk full / perms /
+    // race). Server is responsive, so under the gate the row purges.
+    seedDbRow({ coverArtId: 'io-fail-album', size: 600 });
     mockFetch.mockResolvedValueOnce({
       ok: true,
       headers: { get: () => 'image/jpeg' },
-      arrayBuffer: async () => new ArrayBuffer(128),
+      arrayBuffer: async () => { throw new Error('disk full'); },
     });
-    await cacheAllSizes('sometimes-album');  // success (counter reset to 0)
 
-    // Back to the persistent 500 default for the next 3 tries.
-    purgeFs();
-    await cacheAllSizes('sometimes-album');  // fail 1 of fresh run (counter → 1, not 3)
-    expect(mockDeleteCachedImagesForCoverArt).not.toHaveBeenCalledWith('sometimes-album');
+    await cacheAllSizes('io-fail-album');
 
-    purgeFs();
-    await cacheAllSizes('sometimes-album');  // fail 2 (counter → 2)
-    expect(mockDeleteCachedImagesForCoverArt).not.toHaveBeenCalledWith('sometimes-album');
+    expect(mockDeleteCachedImagesForCoverArt).toHaveBeenCalledWith('io-fail-album');
+  });
 
-    purgeFs();
-    await cacheAllSizes('sometimes-album');  // fail 3 → breaker trips
-    expect(mockDeleteCachedImagesForCoverArt).toHaveBeenCalledWith('sometimes-album');
+  it('preserves on file-IO error when offline', async () => {
+    setConnectivity({ offlineMode: true });
+    seedDbRow({ coverArtId: 'io-fail-album', size: 600 });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: { get: () => 'image/jpeg' },
+      arrayBuffer: async () => { throw new Error('disk full'); },
+    });
+
+    await cacheAllSizes('io-fail-album');
+
+    expect(mockDeleteCachedImagesForCoverArt).not.toHaveBeenCalledWith('io-fail-album');
   });
 });
 
@@ -1502,8 +1634,31 @@ describe('repairIncompleteImagesAsync — outcome counts', () => {
     expect(outcome.failed).toBe(0);
   });
 
-  it('counts a single transient failure as failed (below the 3× threshold)', async () => {
+  it('counts a non-404 server error as removed when connectivity is healthy', async () => {
+    // Under the connectivity-gated model a 500 with healthy connectivity
+    // purges immediately — no 3-strikes leniency. The row goes from
+    // incomplete → gone, classified `removed` not `failed`.
     seedDbRow({ coverArtId: 'album-flaky', size: 600 });
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      headers: { get: () => 'image/jpeg' },
+      arrayBuffer: async () => new ArrayBuffer(0),
+    });
+
+    const outcome = await repairIncompleteImagesAsync();
+
+    expect(outcome.queued).toBe(1);
+    expect(outcome.removed).toBe(1);
+    expect(outcome.failed).toBe(0);
+    expect(outcome.repaired).toBe(0);
+  });
+
+  it('counts a non-404 server error as failed when connectivity is down', async () => {
+    // Same scenario but with the connectivity gate closed — the row
+    // must be preserved (failed), not purged (removed).
+    setConnectivity({ isServerReachable: false });
+    seedDbRow({ coverArtId: 'album-offline-fail', size: 600 });
     mockFetch.mockResolvedValue({
       ok: false,
       status: 500,
@@ -1517,6 +1672,17 @@ describe('repairIncompleteImagesAsync — outcome counts', () => {
     expect(outcome.failed).toBe(1);
     expect(outcome.removed).toBe(0);
     expect(outcome.repaired).toBe(0);
+  });
+
+  it('counts a transport error as failed (no purge regardless of connectivity)', async () => {
+    seedDbRow({ coverArtId: 'album-transport-fail', size: 600 });
+    mockFetch.mockRejectedValue(new Error('Network request failed'));
+
+    const outcome = await repairIncompleteImagesAsync();
+
+    expect(outcome.queued).toBe(1);
+    expect(outcome.failed).toBe(1);
+    expect(outcome.removed).toBe(0);
   });
 });
 

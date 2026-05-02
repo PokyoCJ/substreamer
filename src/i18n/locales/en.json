@@ -748,6 +748,7 @@
   "downloadingEllipsis": "Downloading…",
   "refreshedSuccessfully": "Refreshed successfully",
   "refreshFailed": "Refresh failed",
+  "imageCacheRowRemoved": "Removed",
   "refreshingEllipsis": "Refreshing…",
   "clearImageCacheConfirmMessage": "Delete all cached images? They will be re-downloaded as you browse.",
   "deleteCachedImage": "Delete Cached Image",

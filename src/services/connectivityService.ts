@@ -20,6 +20,44 @@ let reconnectedTimer: ReturnType<typeof setTimeout> | null = null;
 let initialCheck = true;
 let pingInFlight = false;
 
+// First-ping signal: lets background tasks (e.g. image-cache repair) gate
+// destructive decisions on a confirmed server-reachability result rather
+// than the optimistic `isServerReachable=true` default.
+let firstPingCompleted = false;
+let firstPingResolvers: Array<() => void> = [];
+
+function resolveFirstPing(): void {
+  if (firstPingCompleted) return;
+  firstPingCompleted = true;
+  const pending = firstPingResolvers;
+  firstPingResolvers = [];
+  for (const fn of pending) fn();
+}
+
+function drainFirstPingWaiters(): void {
+  // Used when monitoring stops (e.g. user toggles into offline mode) so
+  // pending awaiters unblock and can re-check store state to bail out
+  // rather than hanging forever.
+  const pending = firstPingResolvers;
+  firstPingResolvers = [];
+  for (const fn of pending) fn();
+}
+
+/**
+ * Resolves when the first connectivity ping of the current monitoring
+ * session has produced a result (success or error). Resolves immediately
+ * if monitoring isn't active or if the first ping has already completed.
+ *
+ * Used by background tasks that want to act on confirmed server state,
+ * not the optimistic default. Callers should re-check `connectivityStore`
+ * and `offlineModeStore` after this resolves to decide whether to proceed.
+ */
+export function awaitFirstPing(): Promise<void> {
+  if (firstPingCompleted) return Promise.resolve();
+  if (!unsubscribeNetInfo) return Promise.resolve();
+  return new Promise((resolve) => firstPingResolvers.push(resolve));
+}
+
 function clearPingTimer(): void {
   if (pingTimer != null) {
     clearTimeout(pingTimer);
@@ -102,6 +140,7 @@ function handleServerResult(reachable: boolean): void {
   }
 
   initialCheck = false;
+  resolveFirstPing();
   schedulePing();
 }
 
@@ -110,6 +149,7 @@ function handleSslError(): void {
   store.setServerReachable(false);
   store.setBannerState('ssl-error');
   initialCheck = false;
+  resolveFirstPing();
   schedulePing();
 }
 
@@ -154,6 +194,7 @@ export function startMonitoring(): void {
 
   initialCheck = true;
   pingInFlight = false;
+  firstPingCompleted = false;
 
   unsubscribeNetInfo = NetInfo.addEventListener(handleNetInfoChange);
 
@@ -183,4 +224,8 @@ export function stopMonitoring(): void {
   store.setBannerState('hidden');
   initialCheck = true;
   pingInFlight = false;
+  // Drain any pending awaitFirstPing waiters so they can re-check state
+  // and bail rather than hanging until the next monitoring session.
+  drainFirstPingWaiters();
+  firstPingCompleted = false;
 }

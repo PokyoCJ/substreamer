@@ -57,7 +57,7 @@ jest.mock('../subsonicService');
 
 import { isSSLError } from '../../../modules/expo-ssl-trust/src';
 import { getApiUnchecked } from '../subsonicService';
-import { startMonitoring, stopMonitoring } from '../connectivityService';
+import { awaitFirstPing, startMonitoring, stopMonitoring } from '../connectivityService';
 
 const mockIsSSLError = isSSLError as jest.Mock;
 
@@ -259,5 +259,74 @@ describe('SSL error detection', () => {
     await jest.advanceTimersByTimeAsync(100);
 
     expect(mockStoreState.setBannerState).toHaveBeenCalledWith('unreachable');
+  });
+});
+
+describe('awaitFirstPing', () => {
+  it('resolves immediately when monitoring has not been started', async () => {
+    // No startMonitoring() call → unsubscribeNetInfo is null. The function
+    // resolves so callers can proceed to check store state and bail.
+    await expect(awaitFirstPing()).resolves.toBeUndefined();
+  });
+
+  it('pends until the first ping result is processed', async () => {
+    mockPing.mockResolvedValue({ status: 'ok' });
+    startMonitoring();
+
+    let resolved = false;
+    const promise = awaitFirstPing().then(() => { resolved = true; });
+
+    // Promise is still pending — the first ping has not run.
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    // Trigger the ping cycle via NetInfo and let it complete.
+    mockNetInfoCallback!({ isInternetReachable: true });
+    await jest.advanceTimersByTimeAsync(100);
+
+    await promise;
+    expect(resolved).toBe(true);
+  });
+
+  it('resolves immediately for callers that arrive after the first ping completed', async () => {
+    mockPing.mockResolvedValue({ status: 'ok' });
+    startMonitoring();
+    mockNetInfoCallback!({ isInternetReachable: true });
+    await jest.advanceTimersByTimeAsync(100);
+
+    // First ping has completed — subsequent awaitFirstPing() resolves
+    // without waiting.
+    await expect(awaitFirstPing()).resolves.toBeUndefined();
+  });
+
+  it('drains pending waiters when monitoring stops without a ping result', async () => {
+    // Don't fire NetInfo so the ping never runs. Pending waiters must
+    // unblock when stopMonitoring() is called (e.g. user toggles into
+    // offline mode mid-await) so they can re-check store state and bail.
+    startMonitoring();
+    let resolved = false;
+    const promise = awaitFirstPing().then(() => { resolved = true; });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    stopMonitoring();
+    await promise;
+    expect(resolved).toBe(true);
+  });
+
+  it('resolves after an SSL error is processed', async () => {
+    mockPing.mockRejectedValue(new Error('SSLHandshakeException'));
+    mockIsSSLError.mockReturnValue(true);
+    startMonitoring();
+
+    let resolved = false;
+    const promise = awaitFirstPing().then(() => { resolved = true; });
+    expect(resolved).toBe(false);
+
+    mockNetInfoCallback!({ isInternetReachable: true });
+    await jest.advanceTimersByTimeAsync(100);
+
+    await promise;
+    expect(resolved).toBe(true);
   });
 });

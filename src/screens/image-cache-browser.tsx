@@ -37,7 +37,7 @@ import { offlineModeStore } from '../store/offlineModeStore';
 
 const THUMB_SIZE = 50;
 
-type RowStatus = 'idle' | 'refreshing' | 'success' | 'error';
+type RowStatus = 'idle' | 'refreshing' | 'success' | 'error' | 'removed';
 
 const CacheRow = memo(function CacheRow({
   entry,
@@ -130,6 +130,11 @@ const CacheRow = memo(function CacheRow({
           {status === 'error' && (
             <Text style={[styles.statusText, { color: colors.red }]}>
               {t('refreshFailed')}
+            </Text>
+          )}
+          {status === 'removed' && (
+            <Text style={[styles.statusText, { color: colors.textSecondary }]}>
+              {t('imageCacheRowRemoved')}
             </Text>
           )}
         </View>
@@ -260,15 +265,29 @@ export function ImageCacheBrowserScreen() {
       refreshCachedImage(coverArtId, 'browser')
         .then(() => listCachedImagesAsync('all'))
         .then((result) => {
-          setAllEntries(result);
-          setItemStatus(coverArtId, 'success');
-          setTimeout(() => setItemStatus(coverArtId, 'idle'), 3000);
+          // If the row purged itself during refresh (404, gated 5xx, or
+          // exhausted variant retries), it's gone from the list. Show the
+          // 'removed' badge for 3s by holding the list update until the
+          // badge has had its time on screen, then refresh the list.
+          const stillPresent = result.some((e) => e.coverArtId === coverArtId);
+          if (stillPresent) {
+            setAllEntries(result);
+            setItemStatus(coverArtId, 'success');
+            setTimeout(() => setItemStatus(coverArtId, 'idle'), 3000);
+          } else {
+            setItemStatus(coverArtId, 'removed');
+            setTimeout(() => {
+              setAllEntries(result);
+              setItemStatus(coverArtId, 'idle');
+            }, 3000);
+          }
         })
         .catch((err: unknown) => {
-          // Surface the underlying reason so support can trace why a
-          // row stays stuck. The row circuit-breaker in imageCacheService
-          // will purge 404s and 3× failures; anything surviving to here
-          // is a genuine transient problem the user can retry.
+          // The connectivity-gated purge inside imageCacheService handles
+          // 404s, gated server errors, and exhausted variant retries.
+          // Anything surviving to here is a genuine transient problem
+          // (offline / server unreachable) — leaving the row in place is
+          // correct; the user can retry once connectivity returns.
           // eslint-disable-next-line no-console
           console.warn(
             `[image-cache-browser] refresh failed for ${coverArtId}:`,
