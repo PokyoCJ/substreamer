@@ -1,5 +1,21 @@
 # Changelog
 
+## [8.0.59] - 2026-05-22
+
+- fix(now-playing): resume animation after pause → play
+- ci: update coverage badge [skip ci]
+- feat(settings-server): editable server URL with test gate (#145)
+- ci: update coverage badge [skip ci]
+- feat(track-row): animated now-playing indicator across detail views
+- ci: update coverage badge [skip ci]
+- fix(artist-bio): reliability pass for MusicBrainz + Wikipedia lookup
+- refactor(track-row): widen titles via two-line metadata layout
+- feat(image-cache): use raw server cover-art IDs end-to-end
+- fix(deps): restore expo-system-ui — required by app.json userInterfaceStyle
+- chore(deps): clean up unused packages + apply non-major bumps
+- feat(backup): tag backups with source device + offer merge restore
+- fix(album-detail): disable non-downloaded tracks in offline mode
+- fix(image-cache): connectivity-gated purge for stuck-incomplete rows
 ## [8.0.58] - 2026-05-01
 
 - i18n(splash): translate migration validating/complete subtitles
