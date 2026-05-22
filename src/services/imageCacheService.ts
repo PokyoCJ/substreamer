@@ -36,6 +36,7 @@ import {
   markReconcileRan,
 } from '../store/imageCacheStore';
 import { connectivityStore } from '../store/connectivityStore';
+import { coverArtRecacheStore } from '../store/coverArtRecacheStore';
 import { offlineModeStore } from '../store/offlineModeStore';
 import { fireAndForget } from '../utils/fireAndForget';
 import {
@@ -56,7 +57,6 @@ import { logImageCache } from './imageCacheLogger';
 import {
   ensureCoverArtAuth,
   getCoverArtUrl,
-  stripCoverArtSuffix,
 } from './subsonicService';
 
 // Sentinel cover-art IDs rendered from bundled assets via
@@ -136,19 +136,23 @@ function uriCacheKey(coverArtId: string, size: number): string {
 /**
  * Characters that are either reserved on some filesystems (Windows:
  * `\/:*?"<>|`; legacy macOS: `:`) or otherwise troublesome in URIs.
- * Replaced with `_` before the coverArtId is used as an on-disk
- * directory name. The original coverArtId is still used everywhere
- * else (server URLs, SQL rows, URI cache keys) so the server side and
- * DB-side keys stay stable.
+ * Encoded as `%HH` (uppercase hex) before the coverArtId is used as an
+ * on-disk directory name. `%` is included in the unsafe set so the
+ * encoding is its own inverse — every distinct coverArtId maps to a
+ * distinct on-disk path. The original coverArtId is still used
+ * everywhere else (server URLs, SQL rows, URI cache keys) so server
+ * and DB keys stay verbatim.
  *
- * Today's target is the OpenSubsonic/Navidrome disc-cover format
- * `dc-xxxx:N`, which APFS/ext4 accept but which we want to keep away
- * from the filesystem boundary on principle.
+ * Today's notable target is the OpenSubsonic/Navidrome disc-cover
+ * format `dc-xxxx:N`, which gets sanitised to `dc-xxxx%3AN` on disk
+ * while remaining `dc-xxxx:N` in SQL rows and getCoverArt URLs.
  */
-const FS_UNSAFE_CHARS = /[:\\/?<>*|"\x00]/g;
+const FS_UNSAFE_CHARS = /[%:\\/?<>*|"\x00]/g;
 
 function coverArtPathKey(coverArtId: string): string {
-  return coverArtId.replace(FS_UNSAFE_CHARS, '_');
+  return coverArtId.replace(FS_UNSAFE_CHARS, (c) =>
+    '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'),
+  );
 }
 
 /** Evict every size's URI-cache entry for a coverArtId. Call at every
@@ -816,7 +820,6 @@ export function getCachedImageUri(
   size: number,
 ): string | null {
   if (!coverArtId) return null;
-  coverArtId = stripCoverArtSuffix(coverArtId);
 
   const key = uriCacheKey(coverArtId, size);
   const cached = uriCache.get(key);
@@ -839,7 +842,6 @@ export function getCachedImageUri(
  * filesystem. Used by CachedImage's onError recovery path.
  */
 export function evictUriCacheEntry(coverArtId: string, size: number): void {
-  coverArtId = stripCoverArtSuffix(coverArtId);
   uriCache.delete(uriCacheKey(coverArtId, size));
 }
 
@@ -851,7 +853,6 @@ export function evictUriCacheEntry(coverArtId: string, size: number): void {
  */
 export function deleteCachedVariant(coverArtId: string, size: number): void {
   if (!coverArtId) return;
-  coverArtId = stripCoverArtSuffix(coverArtId);
   uriCache.delete(uriCacheKey(coverArtId, size));
   const subDir = new Directory(ensureCacheDir(), coverArtPathKey(coverArtId));
   if (subDir.exists) {
@@ -898,7 +899,6 @@ export function cacheAllSizes(coverArtId: string): Promise<void> {
   // them for download. Belt-and-braces guard; CachedImage already maps
   // their coverArtId to `undefined` before calling here.
   if (isSentinelCoverArtId(coverArtId)) return Promise.resolve();
-  coverArtId = stripCoverArtSuffix(coverArtId);
 
   const allCached = IMAGE_SIZES.every(
     (s) => getCachedImageUri(coverArtId, s) != null,
@@ -1040,7 +1040,11 @@ async function downloadSourceImage(
   subDir: Directory,
 ): Promise<string | null> {
   await ensureCoverArtAuth();
-  const url = getCoverArtUrl(coverArtId, SOURCE_SIZE);
+  // If the previous resize burned through the 3-strike budget, ask the
+  // server to re-encode the source as a baseline JPEG. Otherwise request
+  // the original bytes verbatim.
+  const forceJpg = resizeFailedCovers.has(coverArtId);
+  const url = getCoverArtUrl(coverArtId, SOURCE_SIZE, forceJpg ? 'jpg' : undefined);
   if (!url) {
     // Null URL means offline, missing auth, or a sentinel slipped past
     // the upstream guards. Treated as transient — the row is preserved
@@ -1053,7 +1057,9 @@ async function downloadSourceImage(
   // preserved. Connectivity service surfaces the outage separately.
   let response: Awaited<ReturnType<typeof fetch>>;
   try {
-    logImageCache(`download id=${coverArtId} start url=${url}`);
+    logImageCache(
+      `download id=${coverArtId} start${forceJpg ? ' format=jpg' : ''} url=${url}`,
+    );
     response = await fetch(url);
   } catch (e) {
     logImageCache(
@@ -1161,6 +1167,23 @@ const variantFailureCount = new Map<string, number>();
 const MAX_VARIANT_FAILURES = 3;
 
 /**
+ * Set of coverArtIds that hit the resize-failure threshold during this
+ * session. The next download for any cover in this set requests the
+ * source from the server with `&format=jpg`, which most Subsonic-
+ * compatible servers (Navidrome, Airsonic, Subsonic itself) honor by
+ * re-encoding the cover as a baseline JPEG — giving the local decoder
+ * clean bytes on the retry instead of the same problematic encoding
+ * (CMYK, 12-bit, progressive with non-standard markers, content-type
+ * mismatch, etc.) that just failed.
+ *
+ * Cleared per-cover on the next successful resize. Survives only in
+ * memory: a process restart loses the flag, the next access uses the
+ * default URL, and if the source is still un-decodable the cycle
+ * recovers naturally through another purge → flag set → format=jpg.
+ */
+const resizeFailedCovers = new Set<string>();
+
+/**
  * Generate a single resized variant from the 600px source using the
  * local `expo-image-resize` native module. Writes to a .tmp file first,
  * then renames. The module uses `BitmapFactory.decodeFile` (Android) /
@@ -1201,6 +1224,7 @@ async function generateResizedVariant(
 
     // Success — reset any accumulated failures for this cover.
     variantFailureCount.delete(coverArtId);
+    resizeFailedCovers.delete(coverArtId);
     logImageCache(`resize id=${coverArtId} size=${size} ok bytes=${dest.size ?? 0}`);
   } catch (e) {
     const next = (variantFailureCount.get(coverArtId) ?? 0) + 1;
@@ -1216,8 +1240,13 @@ async function generateResizedVariant(
       console.warn(
         `[imageCacheService] ${next} consecutive resize failures for coverArt=${coverArtId} — purging cache rows`,
       );
-      logImageCache(`resize id=${coverArtId} threshold-purge`);
+      logImageCache(`resize id=${coverArtId} threshold-purge format-jpg-armed`);
       purgeCoverArtRows(coverArtId);
+      // Arm the format=jpg fallback for the next download attempt. If the
+      // source we just gave up on was CMYK / mismatched-content-type / or
+      // any other variant the local decoder can't handle, asking the
+      // server to re-encode usually fixes it.
+      resizeFailedCovers.add(coverArtId);
     }
   }
 }
@@ -1310,16 +1339,12 @@ export async function listCachedImagesAsync(
  */
 export async function deleteCachedImage(coverArtId: string): Promise<void> {
   if (!coverArtId) return;
-  const original = coverArtId;
-  coverArtId = stripCoverArtSuffix(coverArtId);
 
   evictUriCacheForCover(coverArtId);
 
   const subDir = new Directory(ensureCacheDir(), coverArtPathKey(coverArtId));
   const dirExists = subDir.exists;
-  logImageCache(
-    `deleteCachedImage id=${original}${original !== coverArtId ? ` stripped=${coverArtId}` : ''} dirExists=${dirExists}`,
-  );
+  logImageCache(`deleteCachedImage id=${coverArtId} dirExists=${dirExists}`);
   if (!dirExists) {
     // Clean up any orphan DB rows for this cover (e.g. directory was
     // already removed externally), then stop.
@@ -1358,11 +1383,7 @@ export async function refreshCachedImage(
   coverArtId: string,
   source: string = 'auto',
 ): Promise<void> {
-  const original = coverArtId;
-  coverArtId = stripCoverArtSuffix(coverArtId);
-  logImageCache(
-    `refreshCachedImage start source=${source} id=${original}${original !== coverArtId ? ` stripped=${coverArtId}` : ''}`,
-  );
+  logImageCache(`refreshCachedImage start source=${source} id=${coverArtId}`);
   await deleteCachedImage(coverArtId);
 
   // Remove from queue/downloading so no worker races with us
@@ -1469,4 +1490,146 @@ export function cacheEntityCoverArt(entities: Array<{ coverArt?: string }>): voi
       }
     }
   }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Post-Migration-22 recache worker                                   */
+/* ------------------------------------------------------------------ */
+
+/** Concurrency budget for the recache pass — keeps the server happy. */
+const RECACHE_CONCURRENCY = 5;
+/** Pause between batches so we don't starve playback or other downloads. */
+const RECACHE_BATCH_GAP_MS = 200;
+
+let recacheActive = false;
+let recacheAbortRequested = false;
+
+/**
+ * Walk every downloaded album/playlist and call refreshCachedImage()
+ * under their canonical full cover-art IDs. Used by both the automatic
+ * post-Migration-22 trigger and the manual "Refresh downloaded cover
+ * art" entry in Settings → Storage.
+ *
+ *   - `auto`   only runs when `coverArtRecacheStore.status !== 'done'`.
+ *   - `manual` always resets state and runs again.
+ *
+ * Safe to call multiple times concurrently — the second caller short-
+ * circuits while the first is still running. The first pass walks the
+ * full set; if connectivity drops mid-pass the loop exits and a future
+ * trigger picks up from a fresh pending state.
+ */
+export async function triggerCoverArtRecache(
+  reason: 'auto' | 'manual',
+): Promise<void> {
+  if (recacheActive) return;
+
+  const initialState = coverArtRecacheStore.getState();
+  if (reason === 'auto' && initialState.status === 'done') return;
+
+  // Gate: need at least an internet-reachable signal. The worker itself
+  // handles per-fetch failures gracefully, so being online matters only
+  // to avoid lighting up the banner for nothing.
+  const conn = connectivityStore.getState();
+  if (!conn.isInternetReachable && !conn.isServerReachable) return;
+  if (offlineModeStore.getState().offlineMode) return;
+
+  // Snapshot the downloaded items we need to refresh.
+  let coverIds: string[] = [];
+  try {
+    const items = hydrateCachedItemsForRecache();
+    const seen = new Set<string>();
+    for (const it of items) {
+      if (!it.coverArtId) continue;
+      if (it.type !== 'album' && it.type !== 'playlist') continue;
+      if (seen.has(it.coverArtId)) continue;
+      seen.add(it.coverArtId);
+      coverIds.push(it.coverArtId);
+    }
+  } catch (e) {
+    logImageCache(`recache: snapshot threw ${e instanceof Error ? e.message : String(e)}`);
+    return;
+  }
+
+  if (coverIds.length === 0) {
+    coverArtRecacheStore.getState().begin(0, reason);
+    coverArtRecacheStore.getState().complete();
+    return;
+  }
+
+  recacheActive = true;
+  recacheAbortRequested = false;
+  coverArtRecacheStore.getState().begin(coverIds.length, reason);
+  logImageCache(`recache: ${reason} started, ${coverIds.length} item(s)`);
+
+  try {
+    let cursor = 0;
+    while (cursor < coverIds.length) {
+      if (recacheAbortRequested) {
+        logImageCache(`recache: aborted at ${cursor}/${coverIds.length}`);
+        return;
+      }
+      // Bail mid-pass if connectivity drops — leaves status='running'
+      // and the next online-trigger picks it up from a fresh state.
+      const ck = connectivityStore.getState();
+      if (!ck.isServerReachable && !ck.isInternetReachable) {
+        logImageCache(`recache: connectivity dropped at ${cursor}/${coverIds.length}`);
+        return;
+      }
+
+      const batch = coverIds.slice(cursor, cursor + RECACHE_CONCURRENCY);
+      cursor += batch.length;
+
+      await Promise.all(
+        batch.map(async (id) => {
+          try {
+            await refreshCachedImage(id, `recache-${reason}`);
+            coverArtRecacheStore.getState().recordProcessed();
+          } catch (e) {
+            logImageCache(
+              `recache: per-item fail id=${id} err=${e instanceof Error ? e.message : String(e)}`,
+            );
+            coverArtRecacheStore.getState().recordFailed();
+          }
+        }),
+      );
+
+      if (cursor < coverIds.length) {
+        await new Promise((r) => setTimeout(r, RECACHE_BATCH_GAP_MS));
+      }
+    }
+
+    coverArtRecacheStore.getState().complete();
+    logImageCache('recache: complete');
+  } finally {
+    recacheActive = false;
+  }
+}
+
+/**
+ * Stop the in-flight recache pass at the next batch boundary. The
+ * current state is preserved (status stays `running` until the next
+ * trigger). Mostly for AppState 'background' transitions.
+ */
+export function pauseCoverArtRecache(): void {
+  if (recacheActive) recacheAbortRequested = true;
+}
+
+/**
+ * Snapshot every cached item row's `(type, coverArtId)` for the
+ * recache pass. Broken out so it can be mocked in unit tests without
+ * dragging in the entire `musicCacheTables` import surface.
+ */
+function hydrateCachedItemsForRecache(): Array<{
+  type: string;
+  coverArtId: string | null;
+}> {
+  // Lazy-required: keeps the recache worker testable without forcing
+  // every test that touches imageCacheService to mock musicCacheTables.
+  const { hydrateCachedItems } = require('../store/persistence/musicCacheTables') as {
+    hydrateCachedItems: () => Record<string, { type: string; coverArtId?: string | null }>;
+  };
+  return Object.values(hydrateCachedItems()).map((r) => ({
+    type: r.type,
+    coverArtId: r.coverArtId ?? null,
+  }));
 }

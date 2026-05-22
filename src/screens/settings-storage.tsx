@@ -19,10 +19,12 @@ import {
   clearImageCache,
   reconcileImageCacheAsync,
   repairIncompleteImagesAsync,
+  triggerCoverArtRecache,
 } from '../services/imageCacheService';
 import { clearMusicCache } from '../services/musicCacheService';
 import { clearQueue } from '../services/playerService';
 import { checkStorageLimit, getFreeDiskSpace } from '../services/storageService';
+import { coverArtRecacheStore } from '../store/coverArtRecacheStore';
 import {
   imageCacheStore,
   type MaxConcurrentImageDownloads,
@@ -72,6 +74,16 @@ export function SettingsStorageScreen() {
   const fileCount = imageCacheStore((s) => s.fileCount);
   const incompleteCount = imageCacheStore((s) => s.incompleteCount);
   const maxConcurrentImageDownloads = imageCacheStore((s) => s.maxConcurrentImageDownloads);
+
+  const recacheStatus = coverArtRecacheStore((s) => s.status);
+  const recacheTotal = coverArtRecacheStore((s) => s.total);
+  const recacheProcessed = coverArtRecacheStore((s) => s.processed);
+  const recacheRunning = recacheStatus === 'running' && recacheTotal > 0;
+
+  const handleRefreshDownloadedCovers = useCallback(() => {
+    if (recacheRunning) return;
+    void triggerCoverArtRecache('manual');
+  }, [recacheRunning]);
   const cachedAlbumCount = albumDetailStore((s) => Object.keys(s.albums).length);
   const cachedArtistCount = artistDetailStore((s) => Object.keys(s.artists).length);
   const cachedPlaylistCount = playlistDetailStore((s) => Object.keys(s.playlists).length);
@@ -454,6 +466,20 @@ export function SettingsStorageScreen() {
               {maxConcurrentImageDownloads}
             </Text>
           </Pressable>
+          <Pressable
+            onPress={() => router.push('/image-cache-browser')}
+            style={({ pressed }) => [
+              settingsStyles.navRow,
+              { borderTopColor: colors.border },
+              pressed && settingsStyles.pressed,
+            ]}
+          >
+            <View style={settingsStyles.navRowLeft}>
+              <Ionicons name="images-outline" size={18} color={colors.textPrimary} />
+              <Text style={[settingsStyles.navRowText, { color: colors.textPrimary }]}>{t('browseImageCache')}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />
+          </Pressable>
           <View style={settingsStyles.actionRow}>
             <Pressable
               onPress={handleImageScan}
@@ -504,20 +530,33 @@ export function SettingsStorageScreen() {
               </Text>
             </View>
           )}
-          <Pressable
-            onPress={() => router.push('/image-cache-browser')}
-            style={({ pressed }) => [
-              settingsStyles.navRow,
-              { borderTopColor: colors.border },
-              pressed && settingsStyles.pressed,
-            ]}
-          >
-            <View style={settingsStyles.navRowLeft}>
-              <Ionicons name="images-outline" size={18} color={colors.textPrimary} />
-              <Text style={[settingsStyles.navRowText, { color: colors.textPrimary }]}>{t('browseImageCache')}</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />
-          </Pressable>
+          <View style={settingsStyles.actionRow}>
+            <Pressable
+              onPress={handleRefreshDownloadedCovers}
+              disabled={recacheRunning || offlineMode}
+              style={({ pressed }) => [
+                settingsStyles.actionRowButton,
+                { backgroundColor: colors.primary },
+                pressed && !recacheRunning && !offlineMode && settingsStyles.pressed,
+                (recacheRunning || offlineMode) && settingsStyles.disabled,
+              ]}
+            >
+              {recacheRunning ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="refresh-outline" size={18} color="#fff" />
+              )}
+              <Text style={[settingsStyles.actionRowButtonText, { color: '#fff' }]}>
+                {recacheRunning
+                  ? t('refreshDownloadedCoversProgress', {
+                      defaultValue: 'Refreshing… {{processed}}/{{total}}',
+                      processed: recacheProcessed,
+                      total: recacheTotal,
+                    })
+                  : t('refreshDownloadedCovers', 'Refresh Downloaded Covers')}
+              </Text>
+            </Pressable>
+          </View>
         </View>
       </View>
 

@@ -561,4 +561,47 @@ describe('CachedImage', () => {
     // No Image layer (nothing to render on top).
     expect(findImagesInJSON(toJSON)).toHaveLength(0);
   });
+
+  it('10. re-derives cachedUri after cacheAllSizes resolves (cell picks up the variant when it lands)', async () => {
+    // Start with a cache miss so the debounced effect fires.
+    mockGetCachedImageUri.mockReturnValueOnce(null).mockReturnValueOnce(null);
+
+    let resolveCache: () => void;
+    mockCacheAllSizes.mockImplementationOnce(
+      () => new Promise<void>((r) => { resolveCache = r; }),
+    );
+
+    const { toJSON, UNSAFE_root } = render(<CachedImage coverArtId="late-land" size={50} />);
+    await flushEffects();
+
+    // Fire the debounce so cacheAllSizes is called.
+    await act(async () => {
+      jest.advanceTimersByTime(150);
+      await Promise.resolve();
+    });
+    expect(mockCacheAllSizes).toHaveBeenCalledWith('late-land');
+
+    // Before cacheAllSizes resolves, only the remote URL is rendered (cache
+    // still empty, no file:// image yet).
+    expect(
+      getRenderedImageHandlers(toJSON, UNSAFE_root, 'file:///cache/'),
+    ).toBeNull();
+
+    // Variant just landed on disk; subsequent reads return the file path.
+    mockGetCachedImageUri.mockReturnValue('file:///cache/late-land/50.jpg');
+
+    // Resolve the cacheAllSizes promise — the cell should bump reloadNonce
+    // and re-derive cachedUri.
+    await act(async () => {
+      resolveCache!();
+      await Promise.resolve();
+    });
+
+    const cachedImg = getRenderedImageHandlers(
+      toJSON,
+      UNSAFE_root,
+      'file:///cache/late-land/50.jpg',
+    );
+    expect(cachedImg).not.toBeNull();
+  });
 });

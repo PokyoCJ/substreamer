@@ -37,7 +37,6 @@ import {
   getCoverArtUrl,
   getDownloadStreamUrl,
   getStreamUrl,
-  stripCoverArtSuffix,
 } from '../subsonicService';
 
 const mockAuthStore = authStore as jest.Mocked<typeof authStore>;
@@ -62,37 +61,6 @@ beforeEach(() => {
   } as any);
 });
 
-describe('stripCoverArtSuffix', () => {
-  it('strips hex suffix', () => {
-    expect(stripCoverArtSuffix('al-123_abc123')).toBe('al-123');
-    expect(stripCoverArtSuffix('pl-456_def456')).toBe('pl-456');
-  });
-
-  it('is idempotent when no suffix', () => {
-    expect(stripCoverArtSuffix('al-123')).toBe('al-123');
-  });
-
-  it('preserves when suffix is not hex', () => {
-    expect(stripCoverArtSuffix('al-123_xyz')).toBe('al-123_xyz');
-  });
-
-  it('preserves when no underscore', () => {
-    expect(stripCoverArtSuffix('al123')).toBe('al123');
-  });
-
-  it('handles empty string', () => {
-    expect(stripCoverArtSuffix('')).toBe('');
-  });
-
-  it('handles underscore at start', () => {
-    expect(stripCoverArtSuffix('_abc123')).toBe('_abc123');
-  });
-
-  it('strips only last underscore segment', () => {
-    expect(stripCoverArtSuffix('al-123_extra_abc123')).toBe('al-123_extra');
-  });
-});
-
 describe('getCoverArtUrl', () => {
   it('returns null when not logged in', async () => {
     mockAuthStore.getState.mockReturnValue({
@@ -114,12 +82,20 @@ describe('getCoverArtUrl', () => {
     expect(getCoverArtUrl('al-1')).toBeNull();
   });
 
-  it('builds URL with stripped coverArtId', async () => {
+  it('builds URL with raw coverArtId (no stripping)', async () => {
     await ensureCoverArtAuth();
-    const url = getCoverArtUrl('al-123_abc');
+    const url = getCoverArtUrl('al-123_abc123');
     expect(url).toContain('https://music.example.com/rest/getCoverArt.view');
-    expect(url).toContain('id=al-123');
+    expect(url).toContain('id=al-123_abc123');
     expect(url).toContain('u=user');
+  });
+
+  it('preserves disc-cover IDs verbatim in URL', async () => {
+    await ensureCoverArtAuth();
+    const url = getCoverArtUrl('dc-cover:1');
+    // URLSearchParams URL-encodes `:` as %3A in query strings — that's the
+    // browser/server contract, not our stripping logic.
+    expect(url).toContain('id=dc-cover%3A1');
   });
 
   it('includes size param when provided', async () => {
@@ -132,6 +108,19 @@ describe('getCoverArtUrl', () => {
     await ensureCoverArtAuth();
     const url = getCoverArtUrl('al-1');
     expect(url).not.toContain('size=');
+  });
+
+  it('appends format=jpg when format=jpg is requested', async () => {
+    await ensureCoverArtAuth();
+    const url = getCoverArtUrl('al-1', 600, 'jpg');
+    expect(url).toContain('format=jpg');
+    expect(url).toContain('size=600');
+  });
+
+  it('omits format param by default', async () => {
+    await ensureCoverArtAuth();
+    const url = getCoverArtUrl('al-1', 600);
+    expect(url).not.toContain('format=');
   });
 
   it('returns null when offline mode is on', async () => {

@@ -57,7 +57,13 @@ import {
 } from '../services/dataSyncService';
 import { useLibrarySyncBackgroundNotification } from '../hooks/useLibrarySyncBackgroundNotification';
 import { useLibrarySyncKeepAwake } from '../hooks/useLibrarySyncKeepAwake';
-import { deferredImageCacheInit, initImageCache } from '../services/imageCacheService';
+import {
+  deferredImageCacheInit,
+  initImageCache,
+  pauseCoverArtRecache,
+  triggerCoverArtRecache,
+} from '../services/imageCacheService';
+import { connectivityStore } from '../store/connectivityStore';
 import { deferredMusicCacheInit, getMusicCacheStats, initMusicCache } from '../services/musicCacheService';
 import { checkStorageLimit } from '../services/storageService';
 import { initPlayer, removeNonDownloadedTracks } from '../services/playerService';
@@ -293,8 +299,32 @@ export default function RootLayout() {
       // after the image/music cache init so the walk doesn't race with
       // their synchronous SQLite setup.
       if (!cancelled) await deferredDataSyncInit();
+      // Kick the post-Migration-22 cover-art recache if pending. Idempotent
+      // — bails out cleanly if the migration's already done or there are
+      // no downloaded items to refresh.
+      if (!cancelled) void triggerCoverArtRecache('auto');
     })();
     return () => { cancelled = true; };
+  }, [isLoggedIn]);
+
+  // --- Cover-art recache resumption on connectivity restoration ---
+  // After Migration 22 the recache pass refreshes downloaded items'
+  // covers under the new canonical IDs. If the user was offline at
+  // first launch, kick the worker as soon as the server becomes
+  // reachable. Also covers mid-pass connectivity drops.
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    let prevReachable =
+      connectivityStore.getState().isServerReachable
+      && connectivityStore.getState().isInternetReachable;
+    const unsub = connectivityStore.subscribe((state) => {
+      const reachableNow = state.isServerReachable && state.isInternetReachable;
+      if (reachableNow && !prevReachable) {
+        void triggerCoverArtRecache('auto');
+      }
+      prevReachable = reachableNow;
+    });
+    return () => unsub();
   }, [isLoggedIn]);
 
   // --- Resume the album-detail walk on AppState active transitions ---
@@ -303,6 +333,10 @@ export default function RootLayout() {
     const sub = AppState.addEventListener('change', (next) => {
       if (next === 'active') {
         void recoverStalledSync();
+      } else if (next === 'background' || next === 'inactive') {
+        // Pause any in-flight cover-art recache; it'll resume on the
+        // next 'active' transition or connectivity restoration.
+        pauseCoverArtRecache();
       }
     });
     return () => sub.remove();

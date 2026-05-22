@@ -16,6 +16,7 @@ import { Platform } from 'react-native';
 import { defaultCollator } from '../utils/intl';
 
 import { migrateV3BackupMetas, migrateV4BackupMetas } from './backupService';
+import { coverArtRecacheStore } from '../store/coverArtRecacheStore';
 import { deviceIdentityStore } from '../store/deviceIdentityStore';
 import { getAllSongAlbumIds } from '../store/persistence/detailTables';
 import {
@@ -1053,6 +1054,390 @@ async function backfillMissingPartialAlbums(
 }
 
 /* ------------------------------------------------------------------ */
+/*  Migration 22 — reconcile image cache to full cover-art IDs         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Historical strip — produced the legacy `cached_images.cover_art_id`
+ * by lopping off a trailing `_<hex>` segment. Disabled as of v8.0.59.
+ * Migration 22 still needs to reproduce the old form so it can find
+ * pre-migration rows.
+ */
+const MIGRATION_22_HEX_RE = /^[0-9a-f]+$/i;
+function legacyStripCoverArtSuffix(id: string): string {
+  const i = id.lastIndexOf('_');
+  if (i <= 0) return id;
+  const suffix = id.slice(i + 1);
+  if (!MIGRATION_22_HEX_RE.test(suffix)) return id;
+  return id.slice(0, i);
+}
+
+/**
+ * Historical filesystem sanitisation — replaced FS-unsafe characters
+ * with `_`. The new sanitisation is reversible percent encoding; this
+ * function lets us identify pre-migration directory names so we can
+ * rename them.
+ */
+const MIGRATION_22_LEGACY_FS_UNSAFE = /[:\\/?<>*|"\x00]/g;
+function legacyPathKey(coverArtId: string): string {
+  return coverArtId.replace(MIGRATION_22_LEGACY_FS_UNSAFE, '_');
+}
+
+/**
+ * New filesystem sanitisation — percent-encodes unsafe chars including
+ * `%` itself so the mapping is injective. Mirrors the production
+ * `coverArtPathKey` in `imageCacheService.ts`; duplicated here so the
+ * migration is self-contained.
+ */
+const MIGRATION_22_FS_UNSAFE = /[%:\\/?<>*|"\x00]/g;
+function newPathKey(coverArtId: string): string {
+  return coverArtId.replace(MIGRATION_22_FS_UNSAFE, (c) =>
+    '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'),
+  );
+}
+
+/**
+ * Migration 22 body.
+ *
+ * Background: the legacy `stripCoverArtSuffix` chopped the trailing
+ * `_<hex>` re-index segment off cover-art IDs before they were written
+ * to `cached_images.cover_art_id` and used as on-disk directory names.
+ * We now use raw server IDs end-to-end. This migration reconciles the
+ * existing on-device state without going to the network — every other
+ * table (`cached_items.cover_art_id`, `cached_songs.cover_art`,
+ * `song_index.coverArt`, `download_queue.cover_art_id`, and the
+ * `raw_json` envelopes) already held the full ID, so we can cross-
+ * reference and rewrite.
+ *
+ * After this runs:
+ *   - `cached_images.cover_art_id` holds the full server ID.
+ *   - `image-cache/<dir>/` directories are renamed to the new
+ *     percent-encoded path of the full server ID.
+ *   - Orphan rows + dirs (no entity in the local DB references them)
+ *     are evicted; the next online access repopulates them.
+ *
+ * The recache pass (Phase 3 in the project plan, mounted at app
+ * startup) handles fetching fresh server art under the canonical IDs
+ * for every downloaded album/playlist — this migration does not need
+ * the network.
+ *
+ * Idempotent: re-running on already-clean data produces an empty
+ * mapping (every cover_art column already holds a full ID; no full ID
+ * strips to a different form), so all branches no-op.
+ */
+async function reconcileImageCacheCoverArtIds(
+  log: (message: string) => void,
+): Promise<void> {
+  const db = getDb();
+  if (!db) {
+    log('DB unavailable — skipping image-cache reconciliation.');
+    return;
+  }
+
+  // ---------------------------------------------------------------
+  // Step 1: collect all known full server cover-art IDs from every
+  // table that already held them, and derive two mappings:
+  //   - sqlMapping: legacyStrip(F) -> F   (rewrites `cached_images.cover_art_id`)
+  //   - fsMapping : legacyPathKey(legacyStrip(F)) -> F  (renames disk dirs)
+  // First writer wins; collisions keep the lex-greatest full ID
+  // (proxy for newest re-index).
+  // ---------------------------------------------------------------
+  const allFullIds = new Set<string>();
+  const sqlMapping = new Map<string, string>();
+  const fsMapping = new Map<string, string>();
+  let collisions = 0;
+
+  function record(fullId: string | null | undefined): void {
+    if (!fullId) return;
+    allFullIds.add(fullId);
+
+    // SQL legacy key: the historical `cached_images.cover_art_id` value.
+    const legacySql = legacyStripCoverArtSuffix(fullId);
+    if (legacySql !== fullId) {
+      const existing = sqlMapping.get(legacySql);
+      if (existing === undefined) {
+        sqlMapping.set(legacySql, fullId);
+      } else if (existing !== fullId) {
+        collisions++;
+        if (fullId > existing) sqlMapping.set(legacySql, fullId);
+      }
+    }
+
+    // FS legacy dir name: legacy strip followed by the legacy `_`
+    // substitution. Only worth a rename if the new path differs.
+    const legacyDir = legacyPathKey(legacySql);
+    const newDir = newPathKey(fullId);
+    if (legacyDir !== newDir) {
+      const existing = fsMapping.get(legacyDir);
+      if (existing === undefined) {
+        fsMapping.set(legacyDir, fullId);
+      } else if (existing !== fullId && fullId > existing) {
+        fsMapping.set(legacyDir, fullId);
+      }
+    }
+  }
+
+  try {
+    const rows = db.getAllSync<{ cover_art_id: string | null }>(
+      `SELECT DISTINCT cover_art_id FROM cached_items WHERE cover_art_id IS NOT NULL;`,
+    );
+    for (const r of rows) record(r.cover_art_id);
+  } catch (e) {
+    log(`[m22] cached_items source threw: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  try {
+    const rows = db.getAllSync<{ cover_art: string | null }>(
+      `SELECT DISTINCT cover_art FROM cached_songs WHERE cover_art IS NOT NULL;`,
+    );
+    for (const r of rows) record(r.cover_art);
+  } catch (e) {
+    log(`[m22] cached_songs source threw: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  try {
+    const rows = db.getAllSync<{ cover_art_id: string | null }>(
+      `SELECT DISTINCT cover_art_id FROM download_queue WHERE cover_art_id IS NOT NULL;`,
+    );
+    for (const r of rows) record(r.cover_art_id);
+  } catch (e) {
+    log(`[m22] download_queue source threw: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // song_index column is `coverArt` (no underscore in the camelCase
+  // column name actually used). Defensive try/catch in case the table
+  // doesn't exist on very old installs.
+  try {
+    const rows = db.getAllSync<{ coverArt: string | null }>(
+      `SELECT DISTINCT coverArt FROM song_index WHERE coverArt IS NOT NULL;`,
+    );
+    for (const r of rows) record(r.coverArt);
+  } catch (e) {
+    log(`[m22] song_index source threw: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // Belt-and-braces: raw_json extracts. Should be a no-op given the
+  // normalised columns above already covered them, but keeps the
+  // migration robust if normalised columns ever drift.
+  try {
+    const rows = db.getAllSync<{ c: string | null }>(
+      `SELECT DISTINCT json_extract(raw_json, '$.coverArt') AS c
+         FROM cached_items WHERE raw_json IS NOT NULL;`,
+    );
+    for (const r of rows) record(r.c);
+  } catch (e) {
+    log(`[m22] cached_items.raw_json source threw: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  try {
+    const rows = db.getAllSync<{ c: string | null }>(
+      `SELECT DISTINCT json_extract(raw_json, '$.coverArt') AS c
+         FROM cached_songs WHERE raw_json IS NOT NULL;`,
+    );
+    for (const r of rows) record(r.c);
+  } catch (e) {
+    log(`[m22] cached_songs.raw_json source threw: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  log(
+    `[m22] mapping: ${allFullIds.size} full ID(s), ${sqlMapping.size} SQL key(s) → rewrite, ` +
+      `${fsMapping.size} FS dir(s) → rename, ${collisions} collision(s)`,
+  );
+
+  // ---------------------------------------------------------------
+  // Step 2: reconcile cached_images rows.
+  //   - mapped legacy key → UPDATE row to full ID
+  //   - already at canonical full ID → skip
+  //   - otherwise (orphan) → DELETE row
+  // ---------------------------------------------------------------
+  let sqlRowsUpdated = 0;
+  let sqlRowsEvicted = 0;
+  let sqlPkConflictsResolved = 0;
+
+  try {
+    db.withTransactionSync(() => {
+      const existingRows = db.getAllSync<{ cover_art_id: string }>(
+        `SELECT DISTINCT cover_art_id FROM cached_images;`,
+      );
+
+      for (const row of existingRows) {
+        const cur = row.cover_art_id;
+
+        // Already canonical → idempotent skip.
+        if (allFullIds.has(cur)) continue;
+
+        const fullId = sqlMapping.get(cur);
+        if (fullId === undefined) {
+          // Orphan — no entity in the local DB references this cover.
+          const before = db.getFirstSync<{ c: number }>(
+            `SELECT COUNT(*) AS c FROM cached_images WHERE cover_art_id = ?;`,
+            [cur],
+          );
+          db.runSync(
+            `DELETE FROM cached_images WHERE cover_art_id = ?;`,
+            [cur],
+          );
+          sqlRowsEvicted += before?.c ?? 0;
+          continue;
+        }
+        if (fullId === cur) continue; // shouldn't happen — sqlMapping skips identity — defensive only
+
+        // Rewrite the row. Composite PK (cover_art_id, size) could collide
+        // if a previous abandoned migration already inserted under fullId
+        // at the same size. Reconcile size-by-size to handle that branch.
+        const sizes = db.getAllSync<{ size: number; cached_at: number }>(
+          `SELECT size, cached_at FROM cached_images WHERE cover_art_id = ?;`,
+          [cur],
+        );
+        for (const s of sizes) {
+          const dst = db.getFirstSync<{ cached_at: number }>(
+            `SELECT cached_at FROM cached_images WHERE cover_art_id = ? AND size = ?;`,
+            [fullId, s.size],
+          );
+          if (dst === undefined) {
+            db.runSync(
+              `UPDATE cached_images SET cover_art_id = ? WHERE cover_art_id = ? AND size = ?;`,
+              [fullId, cur, s.size],
+            );
+            sqlRowsUpdated++;
+          } else {
+            sqlPkConflictsResolved++;
+            // Keep the row with the newer cached_at — drop the loser.
+            if (s.cached_at > dst.cached_at) {
+              db.runSync(
+                `DELETE FROM cached_images WHERE cover_art_id = ? AND size = ?;`,
+                [fullId, s.size],
+              );
+              db.runSync(
+                `UPDATE cached_images SET cover_art_id = ? WHERE cover_art_id = ? AND size = ?;`,
+                [fullId, cur, s.size],
+              );
+              sqlRowsUpdated++;
+            } else {
+              db.runSync(
+                `DELETE FROM cached_images WHERE cover_art_id = ? AND size = ?;`,
+                [cur, s.size],
+              );
+            }
+          }
+        }
+      }
+    });
+  } catch (e) {
+    log(`[m22] SQL transaction threw: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // ---------------------------------------------------------------
+  // Step 3: rename / evict on-disk image-cache directories.
+  // ---------------------------------------------------------------
+  let dirsRenamed = 0;
+  let dirsMerged = 0;
+  let dirsEvicted = 0;
+  let dirsSkipped = 0;
+  let dirsUnknown = 0;
+
+  const root = new Directory(Paths.document, 'image-cache');
+  if (!root.exists) {
+    log(
+      `[m22] no image-cache dir present — sql=${sqlRowsUpdated} updated, ` +
+        `${sqlRowsEvicted} evicted, ${sqlPkConflictsResolved} pk-conflicts; ` +
+        `fs=skip (no dir).`,
+    );
+    return;
+  }
+
+  // Pre-compute the canonical FS-dir name for every known full ID so we
+  // can recognise (and skip) directories that are already at the right
+  // place on a fresh install or a re-run.
+  const canonicalDirs = new Set<string>();
+  for (const f of allFullIds) canonicalDirs.add(newPathKey(f));
+
+  let topLevel: string[];
+  try {
+    topLevel = await listDirectoryAsync(root.uri);
+  } catch (e) {
+    log(`[m22] could not enumerate image-cache dir: ${e instanceof Error ? e.message : String(e)}`);
+    return;
+  }
+
+  for (const name of topLevel) {
+    if (!name) continue;
+
+    // Skip metadata sidecars: only handle subdirectories.
+    const src = new Directory(root, name);
+    if (!src.exists) continue;
+
+    // (1) Already at the canonical new path for some full ID → idempotent skip.
+    if (canonicalDirs.has(name)) {
+      dirsSkipped++;
+      continue;
+    }
+
+    // (2) Recognised as a legacy stripped/sanitised form → rename to canonical.
+    const fullId = fsMapping.get(name);
+    if (fullId !== undefined) {
+      const dstName = newPathKey(fullId);
+      const dst = new Directory(root, dstName);
+      if (!dst.exists) {
+        try {
+          dst.create();
+        } catch (e) {
+          log(`[m22] could not create ${dstName}: ${e instanceof Error ? e.message : String(e)}`);
+          continue;
+        }
+      } else {
+        dirsMerged++;
+      }
+
+      let fileNames: string[] = [];
+      try {
+        fileNames = await listDirectoryAsync(src.uri);
+      } catch {
+        continue;
+      }
+      for (const fileName of fileNames) {
+        const srcFile = new File(src, fileName);
+        if (!srcFile.exists) continue;
+        const dstFile = new File(dst, fileName);
+        if (dstFile.exists) {
+          // Collision — keep existing (already merged or canonical).
+          try { srcFile.delete(); } catch { /* best-effort */ }
+          continue;
+        }
+        try { srcFile.move(dstFile); } catch { /* best-effort */ }
+      }
+      try { src.delete(); } catch { /* best-effort */ }
+      dirsRenamed++;
+      continue;
+    }
+
+    // (3) Unrecognised — orphan or stale. Evict.
+    try {
+      src.delete();
+      dirsEvicted++;
+    } catch (e) {
+      dirsUnknown++;
+      log(`[m22] could not evict ${name}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  log(
+    `[m22] sql: ${sqlRowsUpdated} updated, ${sqlRowsEvicted} evicted, ` +
+      `${sqlPkConflictsResolved} pk-conflicts. ` +
+      `fs: ${dirsRenamed} renamed, ${dirsMerged} merged, ${dirsEvicted} evicted, ` +
+      `${dirsSkipped} skipped, ${dirsUnknown} unknown-error.`,
+  );
+
+  // Reset the post-migration recache flag so the next online connection
+  // triggers a server refresh under the canonical IDs. Idempotent.
+  try {
+    coverArtRecacheStore.getState().reset();
+  } catch (e) {
+    log(`[m22] could not reset coverArtRecacheStore: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Task definitions                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -1841,6 +2226,14 @@ const MIGRATION_TASKS: MigrationTask[] = [
       } else {
         log('No v4 backup files found — skipping.');
       }
+    },
+  },
+
+  {
+    id: 22,
+    name: 'Reconcile image cache to full cover-art IDs',
+    run: async (log) => {
+      await reconcileImageCacheCoverArtIds(log);
     },
   },
 

@@ -144,6 +144,14 @@ jest.mock('../connectivityService', () => ({
   awaitFirstPing: () => mockAwaitFirstPing(),
 }));
 
+// `triggerCoverArtRecache` lazy-requires `hydrateCachedItems` to read the
+// downloaded album/playlist set. Mocked so the recache suite can control
+// what the worker sees without dragging in the music-cache table module.
+const mockHydrateCachedItemsForRecache = jest.fn<Record<string, any>, []>(() => ({}));
+jest.mock('../../store/persistence/musicCacheTables', () => ({
+  hydrateCachedItems: () => mockHydrateCachedItemsForRecache(),
+}));
+
 /**
  * Helper: configure connectivity + offline state for a test case.
  * `purgeAllowed` semantics:
@@ -259,7 +267,7 @@ jest.mock('../../store/persistence/imageCacheTable', () => ({
 jest.mock('../subsonicService');
 
 import { defaultCollator } from '../../utils/intl';
-import { getCoverArtUrl, stripCoverArtSuffix } from '../subsonicService';
+import { getCoverArtUrl } from '../subsonicService';
 import {
   IMAGE_SIZES,
   initImageCache,
@@ -275,7 +283,10 @@ import {
   refreshCachedImage,
   reconcileImageCacheAsync,
   repairIncompleteImagesAsync,
+  pauseCoverArtRecache,
+  triggerCoverArtRecache,
 } from '../imageCacheService';
+import { coverArtRecacheStore } from '../../store/coverArtRecacheStore';
 
 const { fetch: mockFetch } = jest.requireMock('expo/fetch') as { fetch: jest.Mock };
 // Reset helpers for the new expo-image-resize mock. Each test can override
@@ -346,7 +357,6 @@ beforeEach(() => {
     mockFileExistsMap.set(targetUri.replace(/^file:\/\//, ''), true);
   });
   (getCoverArtUrl as jest.Mock).mockReturnValue('https://example.com/cover.jpg');
-  (stripCoverArtSuffix as jest.Mock).mockImplementation((id: string) => id.replace(/_[0-9a-f]+$/, ''));
   // Default: empty directory walks for reconcile + recover passes.
   mockListDirectoryAsync.mockResolvedValue([]);
   // Default connectivity: server reachable, internet reachable, not offline
@@ -1002,6 +1012,83 @@ describe('generateResizedVariant — 3-failure circuit breaker purges row', () =
 
     expect(mockDeleteCachedImagesForCoverArt).not.toHaveBeenCalledWith(id);
     expect(mockDbRows.has(mockDbKey(id, 600))).toBe(true);
+  });
+
+  it('arms format=jpg for the next download after a 3-strike purge', async () => {
+    const id = 'force-jpg-cover';
+
+    // First pass: source on disk, resize blows up 3 times → purge fires.
+    mockDirExistsMap.set(subDirName(id), true);
+    mockFileExistsMap.set(fileMockName(id, '600.jpg'), true);
+    seedDbRow({ coverArtId: id, size: 600 });
+    for (const s of IMAGE_SIZES) evictUriCacheEntry(id, s);
+    mockResizeImageToFileAsync.mockRejectedValue(new Error('persistent decode failure'));
+
+    await cacheAllSizes(id);
+
+    // Sanity: purge happened.
+    expect(mockDeleteCachedImagesForCoverArt).toHaveBeenCalledWith(id);
+
+    // Second pass: simulate the post-purge state — no row, no source. The
+    // download path should be entered fresh and `getCoverArtUrl` must be
+    // called with the `'jpg'` format flag this time.
+    (getCoverArtUrl as jest.Mock).mockClear();
+    (getCoverArtUrl as jest.Mock).mockReturnValue('https://example.com/cover.jpg?format=jpg');
+    mockFileExistsMap.delete(fileMockName(id, '600.jpg'));
+    for (const s of IMAGE_SIZES) evictUriCacheEntry(id, s);
+    // Drain anything else the test runner left in flight before our pass.
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: { get: () => 'image/jpeg' },
+      arrayBuffer: async () => new ArrayBuffer(64),
+    });
+
+    await cacheAllSizes(id);
+
+    expect(getCoverArtUrl).toHaveBeenCalledWith(id, 600, 'jpg');
+  });
+
+  it('clears the format=jpg flag once the next resize succeeds', async () => {
+    const id = 'recover-then-default';
+
+    // Arm the flag via a purge cycle.
+    mockDirExistsMap.set(subDirName(id), true);
+    mockFileExistsMap.set(fileMockName(id, '600.jpg'), true);
+    seedDbRow({ coverArtId: id, size: 600 });
+    for (const s of IMAGE_SIZES) evictUriCacheEntry(id, s);
+    mockResizeImageToFileAsync.mockRejectedValue(new Error('boom'));
+    await cacheAllSizes(id);
+    expect(mockDeleteCachedImagesForCoverArt).toHaveBeenCalledWith(id);
+
+    // Pass 2: server returns a clean JPEG, resize succeeds. Flag clears.
+    mockFileExistsMap.delete(fileMockName(id, '600.jpg'));
+    for (const s of IMAGE_SIZES) evictUriCacheEntry(id, s);
+    mockResizeImageToFileAsync.mockReset();
+    mockResizeImageToFileAsync.mockImplementation(async (_src, targetUri) => {
+      mockFileExistsMap.set(targetUri.replace(/^file:\/\//, ''), true);
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: { get: () => 'image/jpeg' },
+      arrayBuffer: async () => new ArrayBuffer(64),
+    });
+    (getCoverArtUrl as jest.Mock).mockClear();
+    (getCoverArtUrl as jest.Mock).mockReturnValue('https://example.com/cover.jpg');
+    await cacheAllSizes(id);
+    expect(getCoverArtUrl).toHaveBeenCalledWith(id, 600, 'jpg');
+
+    // Pass 3: clean state, no prior failure — flag is cleared, no format
+    // param should be requested this time.
+    mockFileExistsMap.delete(fileMockName(id, '600.jpg'));
+    for (const s of IMAGE_SIZES) evictUriCacheEntry(id, s);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: { get: () => 'image/jpeg' },
+      arrayBuffer: async () => new ArrayBuffer(64),
+    });
+    (getCoverArtUrl as jest.Mock).mockClear();
+    await cacheAllSizes(id);
+    expect(getCoverArtUrl).toHaveBeenCalledWith(id, 600, undefined);
   });
 });
 
@@ -1695,24 +1782,24 @@ describe('coverArtPathKey — FS-hostile coverArtId sanitisation', () => {
     return `file://file:///document/image-cache/${dirName}`;
   }
 
-  it('getCachedImageUri maps a `:` in coverArtId to `_` when checking the filesystem', () => {
-    // Sanitised dir exists on disk; raw dir does NOT. The lookup must
-    // resolve to the sanitised path.
-    const sanitised = 'dc-abc_1';
+  it('getCachedImageUri percent-encodes `:` in coverArtId when checking the filesystem', () => {
+    // Sanitised dir exists on disk under the percent-encoded name; raw dir
+    // does NOT. The lookup must resolve to the percent-encoded path.
+    const sanitised = 'dc-abc%3A1';
     const raw = 'dc-abc:1';
     mockDirExistsMap.set(subDirUri(sanitised), true);
     mockFileExistsMap.set(fileMockName(sanitised, '600.jpg'), true);
     mockFileSizeMap.set(fileMockName(sanitised, '600.jpg'), 1000);
 
     const uri = getCachedImageUri(raw, 600);
-    expect(uri).toMatch(/dc-abc_1\/600\.jpg$/);
+    expect(uri).toMatch(/dc-abc%3A1\/600\.jpg$/);
     // The raw-form dir was never asked for.
     expect(mockDirExistsMap.has(subDirUri(raw))).toBe(false);
   });
 
-  it('downloadAndCacheImage writes under the sanitised path', async () => {
+  it('downloadAndCacheImage writes under the percent-encoded path', async () => {
     const raw = 'dc-foo:2';
-    const sanitised = 'dc-foo_2';
+    const sanitised = 'dc-foo%3A2';
     mockFetch.mockResolvedValueOnce({
       ok: true,
       headers: { get: () => 'image/jpeg' },
@@ -1725,12 +1812,44 @@ describe('coverArtPathKey — FS-hostile coverArtId sanitisation', () => {
     expect(mockUpsertCachedImage).toHaveBeenCalledWith(
       expect.objectContaining({ coverArtId: raw, size: 600 }),
     );
-    // But the on-disk File was under the sanitised directory name.
-    // Walk the existence map for any path containing the sanitised dir.
+    // But the on-disk File was under the percent-encoded directory name.
     const sanitisedPaths = [...mockFileExistsMap.keys()].filter((k) =>
       k.includes(`/${sanitised}/`),
     );
     expect(sanitisedPaths.length).toBeGreaterThan(0);
+  });
+
+  it('distinct IDs `dc-abc:1` and `dc-abc_1` resolve to distinct paths', () => {
+    // Regression: the old `:` → `_` mapping collapsed these to the same dir.
+    // Percent-encoded `%3A` makes them injective.
+    const collidingClassic = 'dc-abc_1';
+    const collidingDisc = 'dc-abc:1';
+    const classicDir = 'dc-abc_1';
+    const discDir = 'dc-abc%3A1';
+
+    mockDirExistsMap.set(subDirUri(classicDir), true);
+    mockDirExistsMap.set(subDirUri(discDir), true);
+    mockFileExistsMap.set(fileMockName(classicDir, '300.jpg'), true);
+    mockFileSizeMap.set(fileMockName(classicDir, '300.jpg'), 500);
+    mockFileExistsMap.set(fileMockName(discDir, '300.jpg'), true);
+    mockFileSizeMap.set(fileMockName(discDir, '300.jpg'), 700);
+
+    const classicUri = getCachedImageUri(collidingClassic, 300);
+    const discUri = getCachedImageUri(collidingDisc, 300);
+    expect(classicUri).toMatch(/dc-abc_1\/300\.jpg$/);
+    expect(discUri).toMatch(/dc-abc%3A1\/300\.jpg$/);
+    expect(classicUri).not.toBe(discUri);
+  });
+
+  it('percent-encodes `%` itself so the mapping is its own inverse', () => {
+    const raw = 'weird%id';
+    const sanitised = 'weird%25id';
+    mockDirExistsMap.set(subDirUri(sanitised), true);
+    mockFileExistsMap.set(fileMockName(sanitised, '150.jpg'), true);
+    mockFileSizeMap.set(fileMockName(sanitised, '150.jpg'), 250);
+
+    const uri = getCachedImageUri(raw, 150);
+    expect(uri).toMatch(/weird%25id\/150\.jpg$/);
   });
 });
 
@@ -1758,4 +1877,150 @@ describe('reconcileImageCacheAsync — uriCache eviction', () => {
     // (returns null because the file doesn't exist).
     expect(_get('gone-album', 600)).toBeNull();
   });
+});
+
+/* ------------------------------------------------------------------ */
+/*  Cover-art recache worker (Migration 22 follow-up)                  */
+/* ------------------------------------------------------------------ */
+
+describe('triggerCoverArtRecache', () => {
+  // Spy on refreshCachedImage so we can observe per-item invocations
+  // without exercising the real download pipeline.
+  const refreshSpy = jest.fn().mockResolvedValue(undefined);
+
+  beforeEach(() => {
+    // Reset recache store to a known baseline.
+    coverArtRecacheStore.setState({
+      status: 'pending',
+      total: 0,
+      processed: 0,
+      failed: 0,
+      lastRunAt: null,
+      lastTrigger: null,
+    });
+    setConnectivity({ offlineMode: false, isInternetReachable: true, isServerReachable: true });
+    mockHydrateCachedItemsForRecache.mockReset();
+    mockHydrateCachedItemsForRecache.mockReturnValue({});
+    refreshSpy.mockClear();
+    refreshSpy.mockResolvedValue(undefined);
+    // Make every fetch succeed cheaply — `refreshCachedImage` ends up calling
+    // it inside `cacheAllSizes`. Tiny image body + the existing resize mock
+    // closes the loop without a real download.
+    mockFetch.mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'image/jpeg' },
+      arrayBuffer: async () => new ArrayBuffer(64),
+    });
+  });
+
+  it('does nothing when there are no downloaded items', async () => {
+    mockHydrateCachedItemsForRecache.mockReturnValue({});
+
+    await triggerCoverArtRecache('auto');
+
+    const s = coverArtRecacheStore.getState();
+    expect(s.status).toBe('done');
+    expect(s.total).toBe(0);
+  });
+
+  it('auto trigger is suppressed once status is done', async () => {
+    coverArtRecacheStore.setState({ status: 'done' });
+    mockHydrateCachedItemsForRecache.mockReturnValue({
+      'a-1': { type: 'album', coverArtId: 'cov-1' },
+    });
+
+    await triggerCoverArtRecache('auto');
+
+    // Status stays done; total never set.
+    expect(coverArtRecacheStore.getState().status).toBe('done');
+    expect(coverArtRecacheStore.getState().total).toBe(0);
+  });
+
+  it('manual trigger ignores the done gate', async () => {
+    coverArtRecacheStore.setState({ status: 'done' });
+    mockHydrateCachedItemsForRecache.mockReturnValue({
+      'a-1': { type: 'album', coverArtId: 'cov-1' },
+    });
+
+    await triggerCoverArtRecache('manual');
+
+    const s = coverArtRecacheStore.getState();
+    expect(s.total).toBe(1);
+    expect(s.processed).toBe(1);
+    expect(s.status).toBe('done');
+  });
+
+  it('walks albums and playlists, skips song-type items', async () => {
+    mockHydrateCachedItemsForRecache.mockReturnValue({
+      'a-1': { type: 'album', coverArtId: 'cov-album' },
+      'pl-1': { type: 'playlist', coverArtId: 'cov-playlist' },
+      'song:s-1': { type: 'song', coverArtId: 'cov-song' },
+    });
+
+    await triggerCoverArtRecache('auto');
+
+    const s = coverArtRecacheStore.getState();
+    expect(s.total).toBe(2);
+    expect(s.processed).toBe(2);
+  });
+
+  it('deduplicates by coverArtId', async () => {
+    mockHydrateCachedItemsForRecache.mockReturnValue({
+      'a-1': { type: 'album', coverArtId: 'cov-shared' },
+      'a-2': { type: 'album', coverArtId: 'cov-shared' },
+      'pl-1': { type: 'playlist', coverArtId: 'cov-shared' },
+    });
+
+    await triggerCoverArtRecache('auto');
+
+    expect(coverArtRecacheStore.getState().total).toBe(1);
+  });
+
+  it('bails out cleanly in offline mode', async () => {
+    setConnectivity({ offlineMode: true });
+    mockHydrateCachedItemsForRecache.mockReturnValue({
+      'a-1': { type: 'album', coverArtId: 'cov-1' },
+    });
+
+    await triggerCoverArtRecache('auto');
+
+    // Worker exited before begin(); status untouched.
+    expect(coverArtRecacheStore.getState().status).toBe('pending');
+    expect(coverArtRecacheStore.getState().total).toBe(0);
+  });
+
+  it('bails out cleanly when fully offline (no internet, no server)', async () => {
+    setConnectivity({ isInternetReachable: false, isServerReachable: false });
+    mockHydrateCachedItemsForRecache.mockReturnValue({
+      'a-1': { type: 'album', coverArtId: 'cov-1' },
+    });
+
+    await triggerCoverArtRecache('auto');
+
+    expect(coverArtRecacheStore.getState().status).toBe('pending');
+  });
+
+  it('pauseCoverArtRecache halts the pass at the next batch boundary', async () => {
+    // Need more than RECACHE_CONCURRENCY (5) so the abort flag has
+    // somewhere to take effect.
+    const items: Record<string, any> = {};
+    for (let i = 0; i < 12; i++) {
+      items[`a-${i}`] = { type: 'album', coverArtId: `cov-${i}` };
+    }
+    mockHydrateCachedItemsForRecache.mockReturnValue(items);
+
+    const pass = triggerCoverArtRecache('auto');
+    // Give the first batch a chance to start, then request abort.
+    await Promise.resolve();
+    pauseCoverArtRecache();
+    await pass;
+
+    const s = coverArtRecacheStore.getState();
+    // Status remains 'running' (we bailed before complete()).
+    expect(s.status).toBe('running');
+    expect(s.processed).toBeLessThan(12);
+  });
+
+  // Use refreshSpy to suppress unused-var lint when not exercised.
+  void refreshSpy;
 });

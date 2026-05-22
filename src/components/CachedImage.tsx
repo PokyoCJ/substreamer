@@ -209,9 +209,24 @@ export const CachedImage = memo(function CachedImage({
         `CachedImage debounce id=${coverArtId} size=${size} remote=${remoteUrl ? 'set' : 'null'}`,
       );
 
-      cacheAllSizes(coverArtId).catch(() => {
-        /* cache failure is non-critical; placeholder or remote URL stays */
-      });
+      // Bump reloadNonce when cacheAllSizes resolves AND the variant for
+      // this size has actually landed on disk. Without this, a variant
+      // that lands after mount is never picked up — the cell stays on the
+      // network URL (or placeholder, if remote also failed) until the next
+      // prop change or error retry. We re-check the cache here so an
+      // empty-resolve (e.g. the source download failed, or this size never
+      // generated) doesn't loop us back through the debounced effect's
+      // `reloadNonce` dep needlessly.
+      cacheAllSizes(coverArtId)
+        .then(() => {
+          if (cancelled || currentIdRef.current !== coverArtId) return;
+          if (getCachedImageUri(coverArtId, size) != null) {
+            setReloadNonce((n) => n + 1);
+          }
+        })
+        .catch(() => {
+          /* cache failure is non-critical; placeholder or remote URL stays */
+        });
     }, DEBOUNCE_MS);
 
     return () => {

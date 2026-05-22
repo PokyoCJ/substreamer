@@ -26,7 +26,6 @@ export const isVariousArtists = (name: string | undefined) =>
   name?.trim().toLowerCase() === 'various artists';
 
 export const ensureCoverArtAuth = jest.fn().mockResolvedValue(undefined);
-export const stripCoverArtSuffix = jest.fn((id: string) => id);
 export const getCoverArtUrl = jest.fn().mockReturnValue(null);
 export const getStreamUrl = jest.fn().mockReturnValue(null);
 export const getDownloadStreamUrl = jest.fn().mockReturnValue(null);

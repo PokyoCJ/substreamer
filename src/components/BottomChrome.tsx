@@ -1,10 +1,12 @@
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { CoverArtRecacheBanner } from './CoverArtRecacheBanner';
 import { DownloadBanner } from './DownloadBanner';
 import { MiniPlayer } from './MiniPlayer';
 import { useLayoutMode } from '../hooks/useLayoutMode';
 import { authStore } from '../store/authStore';
+import { coverArtRecacheStore } from '../store/coverArtRecacheStore';
 import { musicCacheStore } from '../store/musicCacheStore';
 import { playerStore } from '../store/playerStore';
 
@@ -45,14 +47,17 @@ export function BottomChrome({ withSafeAreaPadding = false }: BottomChromeProps 
       (q) => q.status === 'downloading' || q.status === 'queued' || q.status === 'error',
     ),
   );
+  const isRecaching = coverArtRecacheStore(
+    (s) => s.status === 'running' && s.total > 0,
+  );
   const insets = useSafeAreaInsets();
 
   if (!isLoggedIn) return null;
   // On wide layouts the MiniPlayer never renders, so the chrome only has a
-  // reason to mount when there are downloads to surface.
-  if (isWide && !hasDownloads) return null;
-  // On compact layouts we need EITHER a track or an active download.
-  if (!isWide && !hasCurrentTrack && !hasDownloads) return null;
+  // reason to mount when there are downloads or a recache pass running.
+  if (isWide && !hasDownloads && !isRecaching) return null;
+  // On compact layouts we need EITHER a track or an active download or a recache.
+  if (!isWide && !hasCurrentTrack && !hasDownloads && !isRecaching) return null;
 
   return (
     <View
@@ -67,6 +72,7 @@ export function BottomChrome({ withSafeAreaPadding = false }: BottomChromeProps 
           there's no UI affordance to dismiss a stuck banner from the
           tabs view — easier to never let it get into that state. The
           entrance animation still plays on every fresh mount. */}
+      {isRecaching && <CoverArtRecacheBanner />}
       {hasDownloads && <DownloadBanner />}
       {!isWide && hasCurrentTrack && <MiniPlayer />}
     </View>

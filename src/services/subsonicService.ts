@@ -184,22 +184,6 @@ export async function ensureCoverArtAuth(): Promise<void> {
   cachedCoverArtKey = key;
 }
 
-/**
- * Navidrome coverArt IDs use `{type}-{entityId}_{hexTimestamp}`. The hex
- * suffix changes when art is re-indexed but the entity is the same.
- * Stripping it produces a stable key for caching and server requests.
- * Idempotent: returns the original ID when no hex suffix is present.
- */
-const HEX_SUFFIX_RE = /^[0-9a-f]+$/i;
-
-export function stripCoverArtSuffix(coverArtId: string): string {
-  const i = coverArtId.lastIndexOf('_');
-  if (i <= 0) return coverArtId;
-  const suffix = coverArtId.slice(i + 1);
-  if (!HEX_SUFFIX_RE.test(suffix)) return coverArtId;
-  return coverArtId.slice(0, i);
-}
-
 function applyUrlAuth(params: URLSearchParams, username: string): void {
   params.set('u', username);
   if (cachedCoverArtSalt != null) {
@@ -210,19 +194,29 @@ function applyUrlAuth(params: URLSearchParams, username: string): void {
   }
 }
 
-export function getCoverArtUrl(coverArtId: string, size?: number): string | null {
+export function getCoverArtUrl(
+  coverArtId: string,
+  size?: number,
+  format?: 'jpg',
+): string | null {
   const { isLoggedIn, serverUrl, username } = authStore.getState();
   if (!coverArtId || !isLoggedIn || !serverUrl || !username) return null;
   if (cachedCoverArtKey === null || !cachedCoverArtToken) return null;
   if (offlineModeStore.getState().offlineMode) return null;
   const base = `${normalizeServerUrl(serverUrl)}/rest/getCoverArt.view`;
   const params = new URLSearchParams({
-    id: stripCoverArtSuffix(coverArtId),
+    id: coverArtId,
     v: '1.15.0',
     c: 'substreamer8',
   });
   applyUrlAuth(params, username);
   if (size != null && size > 0) params.set('size', String(size));
+  // `format=jpg` asks Subsonic-compatible servers (Navidrome, Airsonic et
+  // al.) to re-encode the cover as a baseline JPEG before sending. Used by
+  // the image cache as a recovery path when the local decoder rejected the
+  // server's original bytes (CMYK / progressive / format-mismatch). Servers
+  // that don't honor the param simply ignore it.
+  if (format) params.set('format', format);
   return `${base}?${params.toString()}`;
 }
 
