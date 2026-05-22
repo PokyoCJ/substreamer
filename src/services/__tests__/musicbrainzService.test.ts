@@ -2,27 +2,34 @@ const mockFetch = jest.fn();
 (global as any).fetch = mockFetch;
 
 import {
-  searchArtistMBID,
-  searchArtists,
+  __setRetryBackoffForTests,
+  escapeLuceneQuery,
   getArtistBiography,
-  searchReleaseGroupMBID,
-  searchReleaseGroups,
+  getAlbumDescription,
   getReleaseGroupIdForRelease,
+  getWikidataIdForArtist,
   getWikidataIdForReleaseGroup,
   getWikipediaExtractForAlbum,
-  getAlbumDescription,
+  searchArtistMBID,
+  searchArtists,
+  searchReleaseGroupMBID,
+  searchReleaseGroups,
 } from '../musicbrainzService';
 
 beforeEach(() => {
   mockFetch.mockReset();
+  // Skip the real-time backoff so 503/429 retry tests don't spend 1.1s in
+  // real time each. The retry logic itself is exercised separately in the
+  // fetchWithRetry suite.
+  __setRetryBackoffForTests(0);
 });
 
 describe('searchArtistMBID', () => {
-  it('returns the MBID of the first matching artist', async () => {
+  it('returns the MBID of the top-scored matching artist', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       json: async () => ({
-        artists: [{ id: 'mbid-123', name: 'Radiohead', score: 100 }],
+        artists: [{ id: 'mbid-123', name: 'Radiohead', score: 100, type: 'Group' }],
       }),
     });
     const result = await searchArtistMBID('Radiohead');
@@ -30,7 +37,47 @@ describe('searchArtistMBID', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
     const url = mockFetch.mock.calls[0][0] as string;
     expect(url).toContain('artist%3ARadiohead');
-    expect(url).toContain('limit=1');
+    // Now pulls 5 candidates so we can score-gate and tie-break by type.
+    expect(url).toContain('limit=5');
+  });
+
+  it('rejects candidates below the MIN_ARTIST_SEARCH_SCORE threshold', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        artists: [
+          { id: 'mbid-low', name: 'Maybe Radio', score: 55, type: 'Group' },
+          { id: 'mbid-also-low', name: 'Radio Co.', score: 70, type: 'Group' },
+        ],
+      }),
+    });
+    // Highest score is 70 — still below 90, so we discard everything.
+    expect(await searchArtistMBID('Radiohead')).toBeNull();
+  });
+
+  it('prefers Group/Person type when two candidates tie on score', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        artists: [
+          { id: 'mbid-character', name: 'Radiohead', score: 95, type: 'Character' },
+          { id: 'mbid-band',      name: 'Radiohead', score: 95, type: 'Group' },
+        ],
+      }),
+    });
+    expect(await searchArtistMBID('Radiohead')).toBe('mbid-band');
+  });
+
+  it('lucene-escapes special characters in the name', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ artists: [] }),
+    });
+    await searchArtistMBID('AC/DC');
+    const url = mockFetch.mock.calls[0][0] as string;
+    // `/` is a Lucene special; should appear as `\/` after escape, which
+    // URL-encodes to `%5C%2F`.
+    expect(url).toContain('%5C%2F');
   });
 
   it('returns null when no artists match', async () => {
@@ -122,15 +169,56 @@ describe('getArtistBiography', () => {
     expect(await getArtistBiography('mbid-1')).toBeNull();
   });
 
-  it('returns null when content is empty', async () => {
-    mockFetch.mockResolvedValue({
+  it('returns null when MB content is empty and no Wikidata fallback resolves', async () => {
+    // Stage 1: MB returns whitespace-only content (treated as missing).
+    // Stage 2: artist url-rels lookup returns no wikidata relation.
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ wikipediaExtract: { content: '   ' } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: 'mbid-1', relations: [] }),
+      });
+    expect(await getArtistBiography('mbid-1')).toBeNull();
+  });
+
+  it('falls back to Wikipedia REST when MB extract is empty but Wikidata link exists', async () => {
+    // Stage 1: MB returns nothing.
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({}),
+    });
+    // Stage 2a: artist url-rels has a wikidata relation.
+    mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        wikipediaExtract: { content: '   ' },
+        id: 'mbid-1',
+        relations: [
+          { type: 'wikidata', url: { resource: 'https://www.wikidata.org/wiki/Q42' } },
+        ],
       }),
     });
-    const result = await getArtistBiography('mbid-1');
-    expect(result).toBe('');
+    // Stage 2b: Wikidata sitelinks resolves enwiki title.
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        entities: {
+          Q42: { sitelinks: { enwiki: { title: 'Real_Artist' } } },
+        },
+      }),
+    });
+    // Stage 2c: Wikipedia REST returns the extract.
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        extract: 'Real Artist is a band from somewhere.',
+        content_urls: { desktop: { page: 'https://en.wikipedia.org/wiki/Real_Artist' } },
+      }),
+    });
+
+    expect(await getArtistBiography('mbid-1')).toBe('Real Artist is a band from somewhere.');
   });
 
   it('returns null on non-ok response', async () => {
@@ -723,5 +811,99 @@ describe('AbortSignal forwarding', () => {
     for (const call of mockFetch.mock.calls) {
       expect(call[1].signal).toBe(ctrl.signal);
     }
+  });
+});
+
+describe('escapeLuceneQuery', () => {
+  it('escapes the canonical Lucene specials', () => {
+    expect(escapeLuceneQuery('AC/DC')).toBe('AC\\/DC');
+    expect(escapeLuceneQuery('P!nk')).toBe('P\\!nk');
+    expect(escapeLuceneQuery('blink-182')).toBe('blink\\-182');
+    expect(escapeLuceneQuery('Foo: Bar')).toBe('Foo\\: Bar');
+    expect(escapeLuceneQuery('Sigur Rós')).toBe('Sigur Rós');
+    expect(escapeLuceneQuery('Foo & Bar | Baz')).toBe('Foo \\& Bar \\| Baz');
+    expect(escapeLuceneQuery('Foo (Live)')).toBe('Foo \\(Live\\)');
+  });
+});
+
+describe('fetchWithRetry (exercised via searchArtistMBID)', () => {
+  it('retries once on 503 then returns the second response', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: false, status: 503 })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          artists: [{ id: 'mbid-x', score: 100, type: 'Group' }],
+        }),
+      });
+    expect(await searchArtistMBID('Radiohead')).toBe('mbid-x');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries once on 429', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: false, status: 429 })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          artists: [{ id: 'mbid-y', score: 100, type: 'Group' }],
+        }),
+      });
+    expect(await searchArtistMBID('Test')).toBe('mbid-y');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries once on a transport throw', async () => {
+    mockFetch
+      .mockRejectedValueOnce(new Error('ECONNRESET'))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          artists: [{ id: 'mbid-z', score: 100, type: 'Group' }],
+        }),
+      });
+    expect(await searchArtistMBID('Test')).toBe('mbid-z');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('does NOT retry on 404', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 404 });
+    expect(await searchArtistMBID('Test')).toBeNull();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up after a single retry that still returns 503', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 503 });
+    expect(await searchArtistMBID('Test')).toBeNull();
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('getWikidataIdForArtist', () => {
+  it('extracts the Q-number from a wikidata url-rel', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: 'mbid-1',
+        relations: [
+          { type: 'wikidata', url: { resource: 'https://www.wikidata.org/wiki/Q123' } },
+          { type: 'official homepage', url: { resource: 'https://example.com/' } },
+        ],
+      }),
+    });
+    expect(await getWikidataIdForArtist('mbid-1')).toBe('Q123');
+  });
+
+  it('returns null when no wikidata relation exists', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: 'mbid-1', relations: [] }),
+    });
+    expect(await getWikidataIdForArtist('mbid-1')).toBeNull();
+  });
+
+  it('returns null on a 404', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 404 });
+    expect(await getWikidataIdForArtist('bad-mbid')).toBeNull();
   });
 });

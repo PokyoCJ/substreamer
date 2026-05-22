@@ -29,6 +29,15 @@ import { ratingStore } from './ratingStore';
 /** Hard budget for a single artist-detail fetch (server + MB enrichment). */
 const FETCH_TIMEOUT_MS = 15_000;
 
+/**
+ * How long to remember that a bio lookup returned nothing. Keeps the app
+ * from re-hammering MusicBrainz + Wikipedia on every revisit to an artist
+ * that genuinely doesn't have a public bio (uncommon names, indie acts).
+ * If you suspect a transient outage, the manual refresh path (a future
+ * "Refresh artist info" UI) should ignore this TTL.
+ */
+const BIO_NEGATIVE_CACHE_TTL_MS = 72 * 60 * 60 * 1000; // 72 hours
+
 export interface ArtistDetailEntry {
   artist: ArtistWithAlbumsID3;
   artistInfo: ArtistInfo2 | null;
@@ -38,6 +47,10 @@ export interface ArtistDetailEntry {
   resolvedMbid: string | null;
   /** Timestamp (Date.now()) when this entry was fetched from the server. */
   retrievedAt: number;
+  /** Timestamp (Date.now()) when the bio pipeline last completed (success
+   *  or null result). Used to gate the negative-cache TTL so we don't
+   *  re-hit MB/Wikipedia every visit for artists with no public bio. */
+  bioCheckedAt?: number;
 }
 
 export interface ArtistDetailState {
@@ -95,28 +108,48 @@ export const artistDetailStore = create<ArtistDetailState>()(
             getTopSongs(artistData.name, layoutPreferencesStore.getState().listLength).catch(() => [] as Child[]),
           ]);
 
-          // Resolve biography: prefer Subsonic, fall back to MusicBrainz
+          // Resolve biography: prefer Subsonic, fall back to MusicBrainz.
+          // Within the negative-cache TTL, skip the MB/Wikipedia round-trip
+          // when the previous attempt also came back empty — keeps repeat
+          // visits to artists with no public bio from re-hammering MB and
+          // burning their rate limit on lookups we know will fail.
           let biography: string | null = null;
           let resolvedMbid: string | null = null;
+          let bioCheckedAt: number | undefined;
           const subsonicBio = infoData?.biography ? sanitizeBiographyText(infoData.biography) : null;
           if (subsonicBio && subsonicBio.length > 0) {
             biography = subsonicBio;
             resolvedMbid = getOverride(mbidOverrideStore.getState().overrides, 'artist', id)?.mbid
               ?? infoData?.musicBrainzId
               ?? null;
+            bioCheckedAt = Date.now();
           } else {
-            try {
-              const override = getOverride(mbidOverrideStore.getState().overrides, 'artist', id);
-              const mbid = override?.mbid
-                ?? infoData?.musicBrainzId
-                ?? (await searchArtistMBID(artistData.name, signal));
-              resolvedMbid = mbid;
-              if (mbid) {
-                const mbBio = await getArtistBiography(mbid, signal);
-                if (mbBio) biography = sanitizeBiographyText(mbBio);
+            const cached = get().artists[id];
+            const cachedNullStillFresh =
+              cached?.biography == null &&
+              cached?.bioCheckedAt != null &&
+              Date.now() - cached.bioCheckedAt < BIO_NEGATIVE_CACHE_TTL_MS;
+
+            if (cachedNullStillFresh) {
+              biography = null;
+              resolvedMbid = cached.resolvedMbid;
+              bioCheckedAt = cached.bioCheckedAt;
+            } else {
+              try {
+                const override = getOverride(mbidOverrideStore.getState().overrides, 'artist', id);
+                const mbid = override?.mbid
+                  ?? infoData?.musicBrainzId
+                  ?? (await searchArtistMBID(artistData.name, signal));
+                resolvedMbid = mbid;
+                if (mbid) {
+                  const mbBio = await getArtistBiography(mbid, signal);
+                  if (mbBio) biography = sanitizeBiographyText(mbBio);
+                }
+                bioCheckedAt = Date.now();
+              } catch {
+                /* non-critical — leave bioCheckedAt unset so the next
+                 *  visit retries instead of caching a network error. */
               }
-            } catch {
-              /* non-critical */
             }
           }
 
@@ -127,6 +160,7 @@ export const artistDetailStore = create<ArtistDetailState>()(
             biography,
             resolvedMbid,
             retrievedAt: Date.now(),
+            bioCheckedAt,
           };
 
           const ratingEntries: Array<{ id: string; serverRating: number }> = [

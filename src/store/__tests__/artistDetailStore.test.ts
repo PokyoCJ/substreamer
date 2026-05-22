@@ -277,6 +277,80 @@ describe('fetchArtist — MusicBrainz biography fallback', () => {
     expect(entry!.biography).toBe('Subsonic bio exists.');
     expect(entry!.resolvedMbid).toBe('override-mbid');
   });
+
+  describe('negative-cache TTL', () => {
+    it('skips MusicBrainz when a previous null bio is still fresh (< 72h)', async () => {
+      setupArtist();
+      mockGetArtistInfo2.mockResolvedValue({ biography: '' } as any);
+      mockSearchMBID.mockResolvedValue(null);
+
+      // First fetch: bio comes back null, bioCheckedAt is stamped.
+      const first = await artistDetailStore.getState().fetchArtist('ar-1');
+      expect(first!.biography).toBeNull();
+      expect(first!.bioCheckedAt).toBeDefined();
+      expect(mockSearchMBID).toHaveBeenCalledTimes(1);
+
+      // Second fetch within the TTL: MB stack must not be re-hit.
+      mockSearchMBID.mockClear();
+      mockGetBio.mockClear();
+      const second = await artistDetailStore.getState().fetchArtist('ar-1');
+      expect(second!.biography).toBeNull();
+      expect(mockSearchMBID).not.toHaveBeenCalled();
+      expect(mockGetBio).not.toHaveBeenCalled();
+    });
+
+    it('re-attempts MB lookup once the cached null is older than the TTL', async () => {
+      setupArtist();
+      mockGetArtistInfo2.mockResolvedValue({ biography: '' } as any);
+      mockSearchMBID.mockResolvedValue(null);
+
+      // Seed a stale cached entry — bioCheckedAt > 72h ago.
+      const staleTs = Date.now() - 73 * 60 * 60 * 1000;
+      artistDetailStore.setState({
+        artists: {
+          'ar-1': {
+            artist: { id: 'ar-1', name: 'Radiohead', albumCount: 9, album: [] } as any,
+            artistInfo: null,
+            topSongs: [],
+            biography: null,
+            resolvedMbid: null,
+            retrievedAt: staleTs,
+            bioCheckedAt: staleTs,
+          },
+        },
+      });
+
+      await artistDetailStore.getState().fetchArtist('ar-1');
+
+      // The MB search should have been called again — the negative cache
+      // expired so we retry.
+      expect(mockSearchMBID).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not gate on TTL when Subsonic has a bio (always uses it)', async () => {
+      setupArtist();
+      mockGetArtistInfo2.mockResolvedValue({ biography: 'Fresh from server.' } as any);
+
+      // Even with a fresh-negative cache, a Subsonic bio overrides it.
+      artistDetailStore.setState({
+        artists: {
+          'ar-1': {
+            artist: { id: 'ar-1', name: 'Radiohead', albumCount: 9, album: [] } as any,
+            artistInfo: null,
+            topSongs: [],
+            biography: null,
+            resolvedMbid: null,
+            retrievedAt: Date.now(),
+            bioCheckedAt: Date.now(),
+          },
+        },
+      });
+
+      const entry = await artistDetailStore.getState().fetchArtist('ar-1');
+      expect(entry!.biography).toBe('Fresh from server.');
+      expect(mockSearchMBID).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('refreshTopSongs', () => {
