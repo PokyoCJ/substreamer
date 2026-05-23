@@ -100,7 +100,7 @@
     "jest-expo": "~56.0.4",
     "patch-package": "^8.0.1",
     "sharp": "^0.34.5",
-    "typescript": "~5.9.3"
+    "typescript": "~6.0.3"
   },
   "private": true,
   "expo": {
