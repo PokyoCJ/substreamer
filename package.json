@@ -70,6 +70,7 @@
     "expo-status-bar": "~55.0.5",
     "expo-system-ui": "~55.0.16",
     "i18next": "^26.0.8",
+    "node-addon-api": "^8.7.0",
     "node-gyp": "^12.2.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",
