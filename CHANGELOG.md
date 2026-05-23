@@ -1,5 +1,18 @@
 # Changelog
 
+## [8.0.61] - 2026-05-23
+
+- build(modules): discover tested modules dynamically instead of hardcoding
+- build(android): move ProGuard rules to a versioned .pro file
+- refactor(split-layout): gate timer callbacks behind a transition-id ref
+- refactor(player): extract usePlayerAlbumInfo + usePlayerLyrics hooks
+- refactor(boot): move lifecycle-sensitive subscriptions out of module scope
+- fix(library): honor empty fetches + capture reconcile baseline at commit time
+- feat(persistence): surface degraded-mode + refuse login when SQLite unavailable
+- refactor(persistence): per-store rehydration with structured result
+- refactor(boot): isolate deferred-startup stages with per-stage try/catch
+- fix(deps): restore node-gyp — required by sharp's native install
+- ci: update coverage badge [skip ci]
 ## [8.0.60] - 2026-05-22
 
 - release: v8.0.59
