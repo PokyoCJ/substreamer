@@ -5,22 +5,26 @@ import { musicCacheStore } from '../musicCacheStore';
 import { pendingScrobbleStore } from '../pendingScrobbleStore';
 import { songIndexStore } from '../songIndexStore';
 
+export interface RehydrationResult {
+  succeeded: string[];
+  failed: Array<{ store: string; error: string }>;
+}
+
 /**
  * Single entry point for rehydrating every per-row SQLite-backed Zustand
- * store. Replaces four scattered `hydrateFromDb()` calls.
+ * store. Each store hydrates in its own try/catch so a corrupt row in one
+ * store cannot block the others from loading; the caller receives a
+ * structured result describing which succeeded and which failed.
  *
  * Called from exactly two sites: the `rehydrated && isLoggedIn` useEffect
- * in `src/app/_layout.tsx` (before any data-sync flow runs) and the splash
- * post-migration callback in `src/components/AnimatedSplashScreen.tsx` (so
- * migrations get a chance to populate tables before the stores read). Both
- * calls are idempotent — each store's `hydrateFromDb()` re-reads the
- * current SQL state and replaces its in-memory mirror, safe under our
- * write-through semantics.
+ * in `src/app/_layout.tsx` and the splash post-migration callback in
+ * `src/components/AnimatedSplashScreen.tsx`. Both calls are idempotent —
+ * each store's `hydrateFromDb()` re-reads the current SQL state and
+ * replaces its in-memory mirror, safe under our write-through semantics.
  *
- * Order matters only for future cross-store dependencies: albumDetail and
- * songIndex are naturally paired, completedScrobble and musicCache are
- * independent. Keep the current order stable so anyone adding a new store
- * sees an obvious spot to plug in.
+ * Order is stable but has no FK-style dependency; each store hydrates
+ * independently. Keep the current order so new stores have an obvious
+ * place to plug in.
  *
  * **Not exported from `./index.ts`.** This module imports stores; stores
  * import from `./index.ts` for table helpers. Re-exporting here would
@@ -31,16 +35,30 @@ import { songIndexStore } from '../songIndexStore';
  * by this helper — Zustand's `persist` middleware auto-rehydrates them on
  * store creation.
  */
-export function rehydrateAllStores(): void {
-  try {
-    albumDetailStore.getState().hydrateFromDb();
-    songIndexStore.getState().hydrateFromDb();
-    completedScrobbleStore.getState().hydrateFromDb();
-    pendingScrobbleStore.getState().hydrateFromDb();
-    musicCacheStore.getState().hydrateFromDb();
-    imageCacheStore.getState().hydrateFromDb();
-  } catch (e) {
-    // eslint-disable-next-line no-console
-    console.warn('[rehydrateAllStores] failed', e);
+export function rehydrateAllStores(): RehydrationResult {
+  const result: RehydrationResult = { succeeded: [], failed: [] };
+  const stores: Array<[string, () => void]> = [
+    ['albumDetail', () => albumDetailStore.getState().hydrateFromDb()],
+    ['songIndex', () => songIndexStore.getState().hydrateFromDb()],
+    ['completedScrobble', () => completedScrobbleStore.getState().hydrateFromDb()],
+    ['pendingScrobble', () => pendingScrobbleStore.getState().hydrateFromDb()],
+    ['musicCache', () => musicCacheStore.getState().hydrateFromDb()],
+    ['imageCache', () => imageCacheStore.getState().hydrateFromDb()],
+  ];
+  for (const [name, hydrate] of stores) {
+    try {
+      hydrate();
+      result.succeeded.push(name);
+    } catch (e) {
+      result.failed.push({
+        store: name,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
   }
+  if (result.failed.length > 0) {
+    // eslint-disable-next-line no-console
+    console.warn('[rehydrateAllStores] partial failure', result.failed);
+  }
+  return result;
 }
