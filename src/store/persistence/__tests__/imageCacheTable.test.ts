@@ -122,10 +122,12 @@ function makeFakeDb() {
       } as T;
     }
     if (
-      s.startsWith(
-        'SELECT COUNT(*) AS c FROM ( SELECT cover_art_id FROM cached_images GROUP BY cover_art_id HAVING COUNT(*) < 4',
-      )
+      s.includes('SELECT COUNT(*) AS c FROM ( SELECT cover_art_id FROM cached_images')
+      && s.includes('GROUP BY cover_art_id HAVING COUNT(*) < 4')
     ) {
+      // Matches both the legacy form and the new form with the
+      // NOT IN (SELECT cover_art_id FROM image_download_queue) filter.
+      // Tests don't seed the queue, so the filter never excludes anything.
       return { c: incompleteCovers().length } as T;
     }
     if (s.startsWith('SELECT 1 AS c FROM cached_images WHERE cover_art_id = ? AND size = ?')) {
@@ -159,10 +161,11 @@ function makeFakeDb() {
       ) as T[];
     }
     if (
-      s.startsWith(
-        'SELECT cover_art_id FROM cached_images GROUP BY cover_art_id HAVING COUNT(*) < 4',
-      )
+      s.startsWith('SELECT cover_art_id FROM cached_images')
+      && s.includes('GROUP BY cover_art_id HAVING COUNT(*) < 4')
     ) {
+      // Matches both the legacy form and the new form with the
+      // NOT IN (SELECT cover_art_id FROM image_download_queue) filter.
       return incompleteCovers().map((cover_art_id) => ({ cover_art_id })) as T[];
     }
     return [];

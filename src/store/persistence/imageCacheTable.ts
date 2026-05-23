@@ -82,9 +82,17 @@ export function hydrateImageCacheAggregates(): ImageCacheAggregates {
          COUNT(DISTINCT cover_art_id) AS image_count
        FROM cached_images;`,
     );
+    // Exclude cover_art_ids currently in the image-download queue: those
+    // rows are "in progress" (queued or downloading), not "incomplete".
+    // Mid-refresh a cover is briefly missing variants between delete and
+    // download-complete, and without this filter the Settings count
+    // ticks up to 1 and back to 0 on every row, making the screen flash.
     const incomplete = db.getFirstSync<{ c: number }>(
       `SELECT COUNT(*) AS c FROM (
          SELECT cover_art_id FROM cached_images
+           WHERE cover_art_id NOT IN (
+             SELECT cover_art_id FROM image_download_queue
+           )
            GROUP BY cover_art_id HAVING COUNT(*) < 4
        );`,
     );
@@ -255,8 +263,9 @@ export function getAllCachedCoverArtIds(): string[] {
 }
 
 /**
- * Every cover_art_id whose row count is < 4. One SQL query replaces the
- * whole-tree disk walk that used to feed `recoverStalledImageDownloadsAsync`.
+ * Every cover_art_id whose row count is < 4 AND that isn't currently
+ * in the image-download queue. Excluding in-flight covers keeps the
+ * Repair button from racing the refresh worker for the same rows.
  */
 export function findIncompleteCovers(): string[] {
   const db = getDb();
@@ -264,6 +273,9 @@ export function findIncompleteCovers(): string[] {
   try {
     const rows = db.getAllSync<{ cover_art_id: string }>(
       `SELECT cover_art_id FROM cached_images
+         WHERE cover_art_id NOT IN (
+           SELECT cover_art_id FROM image_download_queue
+         )
          GROUP BY cover_art_id HAVING COUNT(*) < 4
          ORDER BY cover_art_id ASC;`,
     );
@@ -280,6 +292,9 @@ export function countIncompleteCovers(): number {
     const row = db.getFirstSync<{ c: number }>(
       `SELECT COUNT(*) AS c FROM (
          SELECT cover_art_id FROM cached_images
+           WHERE cover_art_id NOT IN (
+             SELECT cover_art_id FROM image_download_queue
+           )
            GROUP BY cover_art_id HAVING COUNT(*) < 4
        );`,
     );

@@ -625,43 +625,43 @@ export function SettingsStorageScreen() {
             </View>
           ) : (
             <View style={styles.refreshIdleContainer}>
-              <Pressable
-                onPress={handleRefreshDownloadedCovers}
-                disabled={offlineMode}
-                style={({ pressed }) => [
-                  settingsStyles.actionRowButton,
-                  styles.refreshIdleButton,
-                  { backgroundColor: colors.primary },
-                  pressed && !offlineMode && settingsStyles.pressed,
-                  offlineMode && settingsStyles.disabled,
-                ]}
-              >
-                <Ionicons name="refresh-outline" size={18} color="#fff" />
-                <Text style={[settingsStyles.actionRowButtonText, { color: '#fff' }]}>
-                  {t('refreshDownloadedMusicCovers')}
-                </Text>
-              </Pressable>
-              <Text style={[styles.refreshHint, { color: colors.textSecondary }]}>
-                {t('refreshDownloadedMusicCoversHint')}
+              <Text style={[styles.refreshHeader, { color: colors.textPrimary }]}>
+                {t('refreshCoversHeader')}
               </Text>
-              <Pressable
-                onPress={handleRefreshAllCovers}
-                disabled={offlineMode}
-                style={({ pressed }) => [
-                  settingsStyles.actionRowButton,
-                  styles.refreshIdleButton,
-                  { borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth },
-                  pressed && !offlineMode && settingsStyles.pressed,
-                  offlineMode && settingsStyles.disabled,
-                ]}
-              >
-                <Ionicons name="refresh-outline" size={18} color={colors.textPrimary} />
-                <Text style={[settingsStyles.actionRowButtonText, { color: colors.textPrimary }]}>
-                  {t('refreshAllCachedCovers')}
-                </Text>
-              </Pressable>
+              <View style={settingsStyles.actionRow}>
+                <Pressable
+                  onPress={handleRefreshDownloadedCovers}
+                  disabled={offlineMode}
+                  style={({ pressed }) => [
+                    settingsStyles.actionRowButton,
+                    { backgroundColor: colors.primary },
+                    pressed && !offlineMode && settingsStyles.pressed,
+                    offlineMode && settingsStyles.disabled,
+                  ]}
+                >
+                  <Ionicons name="refresh-outline" size={18} color="#fff" />
+                  <Text style={[settingsStyles.actionRowButtonText, { color: '#fff' }]}>
+                    {t('refreshCoversOfflineMusic')}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={handleRefreshAllCovers}
+                  disabled={offlineMode}
+                  style={({ pressed }) => [
+                    settingsStyles.actionRowButton,
+                    { backgroundColor: colors.primary },
+                    pressed && !offlineMode && settingsStyles.pressed,
+                    offlineMode && settingsStyles.disabled,
+                  ]}
+                >
+                  <Ionicons name="refresh-outline" size={18} color="#fff" />
+                  <Text style={[settingsStyles.actionRowButtonText, { color: '#fff' }]}>
+                    {t('refreshCoversAll')}
+                  </Text>
+                </Pressable>
+              </View>
               <Text style={[styles.refreshHint, { color: colors.textSecondary }]}>
-                {t('refreshAllCachedCoversHint')}
+                {t('refreshCoversHint')}
               </Text>
             </View>
           )}
@@ -882,10 +882,12 @@ const styles = StyleSheet.create({
   },
   refreshIdleContainer: {
     marginTop: 12,
-    gap: 6,
+    gap: 8,
   },
-  refreshIdleButton: {
-    width: '100%',
+  refreshHeader: {
+    fontSize: 15,
+    fontWeight: '600',
+    paddingHorizontal: 4,
   },
   refreshHint: {
     fontSize: 12,
