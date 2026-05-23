@@ -38,11 +38,19 @@ export function SplitLayout({ main, panel, panelPlaceholder, animate = true }: S
   // component mounting (FlashList, CachedImage, etc.) during the layout change.
   const [panelReady, setPanelReady] = useState(hasPanel);
 
+  // Generation token gates stale timer callbacks. Each enter/exit cycle bumps
+  // the counter; timeouts compare their captured ID against the current ref
+  // and bail when a newer cycle has started. Prevents the rare race where
+  // rapid show/hide toggles within SLIDE_DURATION (350ms) leave panelReady
+  // desync'd from renderPanel.
+  const transitionIdRef = useRef(0);
+
   if (panel !== null) {
     lastPanelRef.current = panel;
   }
 
   useEffect(() => {
+    const id = ++transitionIdRef.current;
     if (hasPanel) {
       setRenderPanel(true);
       cancelAnimation(panelProgress);
@@ -62,7 +70,9 @@ export function SplitLayout({ main, panel, panelPlaceholder, animate = true }: S
         // change because `hasCurrentTrack || queueLoading` transitions).
         // Relying on the callback could leave panelReady stranded at
         // false and strand the placeholder gradient forever.
-        const timer = setTimeout(() => setPanelReady(true), SLIDE_DURATION);
+        const timer = setTimeout(() => {
+          if (transitionIdRef.current === id) setPanelReady(true);
+        }, SLIDE_DURATION);
         return () => clearTimeout(timer);
       } else {
         panelProgress.value = 1;
@@ -83,6 +93,7 @@ export function SplitLayout({ main, panel, panelPlaceholder, animate = true }: S
           easing: SLIDE_EASING,
         });
         const timer = setTimeout(() => {
+          if (transitionIdRef.current !== id) return;
           setRenderPanel(false);
           setPanelReady(false);
         }, SLIDE_DURATION);
