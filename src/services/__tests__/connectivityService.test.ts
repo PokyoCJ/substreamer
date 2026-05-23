@@ -145,24 +145,50 @@ describe('ping cycle', () => {
     expect(mockPing).toHaveBeenCalled();
   });
 
-  it('marks server unreachable on ping failure', async () => {
+  it('marks server unreachable after FAILURE_THRESHOLD consecutive ping failures', async () => {
     mockPing.mockRejectedValue(new Error('timeout'));
     startMonitoring();
 
     mockNetInfoCallback!({ isInternetReachable: true });
     await jest.advanceTimersByTimeAsync(100);
 
+    // First failure: debounced — banner not yet flipped.
+    expect(mockStoreState.setServerReachable).not.toHaveBeenCalledWith(false);
+
+    // Wait for the next ping at the fast-path interval (5s) and let it
+    // resolve. Second consecutive failure trips the threshold.
+    await jest.advanceTimersByTimeAsync(6000);
+
     expect(mockStoreState.setServerReachable).toHaveBeenCalledWith(false);
   });
 
-  it('marks server unreachable on non-ok ping status', async () => {
+  it('marks server unreachable after 2 consecutive non-ok ping statuses', async () => {
     mockPing.mockResolvedValue({ status: 'failed' });
     startMonitoring();
 
     mockNetInfoCallback!({ isInternetReachable: true });
     await jest.advanceTimersByTimeAsync(100);
+    expect(mockStoreState.setServerReachable).not.toHaveBeenCalledWith(false);
 
+    await jest.advanceTimersByTimeAsync(6000);
     expect(mockStoreState.setServerReachable).toHaveBeenCalledWith(false);
+  });
+
+  it('does NOT mark unreachable on a single failed ping (debounce protects against transient blips)', async () => {
+    mockPing
+      .mockRejectedValueOnce(new Error('transient'))
+      .mockResolvedValue({ status: 'ok' });
+    startMonitoring();
+
+    mockNetInfoCallback!({ isInternetReachable: true });
+    await jest.advanceTimersByTimeAsync(100);
+    // First failure shouldn't surface anything
+    expect(mockStoreState.setServerReachable).not.toHaveBeenCalledWith(false);
+    expect(mockStoreState.setBannerState).not.toHaveBeenCalledWith('unreachable');
+
+    // Next ping succeeds → failure count resets, no banner ever shown
+    await jest.advanceTimersByTimeAsync(6000);
+    expect(mockStoreState.setBannerState).not.toHaveBeenCalledWith('unreachable');
   });
 
   it('sets internet reachable from NetInfo state', async () => {
@@ -181,41 +207,49 @@ describe('ping cycle', () => {
 });
 
 describe('banner state transitions', () => {
-  it('shows unreachable banner when server is down', async () => {
+  it('shows unreachable banner after the debounce threshold trips', async () => {
     mockPing.mockRejectedValue(new Error('timeout'));
     startMonitoring();
 
     mockNetInfoCallback!({ isInternetReachable: true });
     await jest.advanceTimersByTimeAsync(100);
+    // First failure: silent (debounce).
+    expect(mockStoreState.setBannerState).not.toHaveBeenCalledWith('unreachable');
 
+    // Second failure trips the threshold.
+    await jest.advanceTimersByTimeAsync(6000);
     expect(mockStoreState.setBannerState).toHaveBeenCalledWith('unreachable');
   });
 
   it('shows reconnected banner when server comes back after being down', async () => {
-    mockPing.mockRejectedValueOnce(new Error('timeout'));
+    mockPing.mockRejectedValue(new Error('timeout'));
     startMonitoring();
     mockNetInfoCallback!({ isInternetReachable: true });
     await jest.advanceTimersByTimeAsync(100);
+    // Trip the debounce: need 2 failures
+    await jest.advanceTimersByTimeAsync(6000);
 
     expect(mockStoreState.isServerReachable).toBe(false);
     mockStoreState.setBannerState.mockClear();
 
-    mockPing.mockResolvedValueOnce({ status: 'ok' });
+    mockPing.mockResolvedValue({ status: 'ok' });
     await jest.advanceTimersByTimeAsync(6000);
 
     expect(mockStoreState.setBannerState).toHaveBeenCalledWith('reconnected');
   });
 
   it('hides reconnected banner after 2.5s', async () => {
-    mockPing.mockRejectedValueOnce(new Error('down'));
+    mockPing.mockRejectedValue(new Error('down'));
     startMonitoring();
     mockNetInfoCallback!({ isInternetReachable: true });
     await jest.advanceTimersByTimeAsync(100);
+    // Trip the debounce
+    await jest.advanceTimersByTimeAsync(6000);
 
     expect(mockStoreState.isServerReachable).toBe(false);
     mockStoreState.setBannerState.mockClear();
 
-    mockPing.mockResolvedValueOnce({ status: 'ok' });
+    mockPing.mockResolvedValue({ status: 'ok' });
     await jest.advanceTimersByTimeAsync(6000);
     expect(mockStoreState.setBannerState).toHaveBeenCalledWith('reconnected');
 
@@ -250,14 +284,18 @@ describe('SSL error detection', () => {
     expect(mockStoreState.setServerReachable).toHaveBeenCalledWith(false);
   });
 
-  it('shows unreachable banner for non-SSL errors', async () => {
+  it('shows unreachable banner for non-SSL errors after the debounce threshold', async () => {
     mockPing.mockRejectedValue(new Error('Network timeout'));
     mockIsSSLError.mockReturnValue(false);
     startMonitoring();
 
     mockNetInfoCallback!({ isInternetReachable: true });
     await jest.advanceTimersByTimeAsync(100);
+    // First failure: silent
+    expect(mockStoreState.setBannerState).not.toHaveBeenCalledWith('unreachable');
 
+    // Second failure trips the threshold
+    await jest.advanceTimersByTimeAsync(6000);
     expect(mockStoreState.setBannerState).toHaveBeenCalledWith('unreachable');
   });
 });

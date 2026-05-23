@@ -13,12 +13,23 @@ const PING_INTERVAL_UNREACHABLE_MS = 5_000;
 const PING_TIMEOUT_MS = 5_000;
 const RECONNECTED_DISPLAY_MS = 2_500;
 
+/**
+ * Require N consecutive failed pings before marking the server unreachable.
+ * A single timeout — common when the server is under load from concurrent
+ * cover-art / library-sync requests, or on a flaky mobile connection —
+ * shouldn't flip the banner. With THRESHOLD=2 and 5s timeout + 5s
+ * faster-poll-on-failure cadence, a real outage surfaces the banner in
+ * ~15s, while transient single-ping failures are silently absorbed.
+ */
+const FAILURE_THRESHOLD = 2;
+
 let unsubscribeNetInfo: (() => void) | null = null;
 let appStateSubscription: NativeEventSubscription | null = null;
 let pingTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectedTimer: ReturnType<typeof setTimeout> | null = null;
 let initialCheck = true;
 let pingInFlight = false;
+let consecutiveFailures = 0;
 
 // First-ping signal: lets background tasks (e.g. image-cache repair) gate
 // destructive decisions on a confirmed server-reachability result rather
@@ -75,9 +86,13 @@ function clearReconnectedTimer(): void {
 function schedulePing(): void {
   clearPingTimer();
   const { isServerReachable } = connectivityStore.getState();
-  const interval = isServerReachable
-    ? PING_INTERVAL_REACHABLE_MS
-    : PING_INTERVAL_UNREACHABLE_MS;
+  // Speed up polling as soon as we see ANY failure (not only after we've
+  // flipped to unreachable). Catches transient blips faster so the
+  // FAILURE_THRESHOLD debounce doesn't slow real outage detection.
+  const fastPath = !isServerReachable || consecutiveFailures > 0;
+  const interval = fastPath
+    ? PING_INTERVAL_UNREACHABLE_MS
+    : PING_INTERVAL_REACHABLE_MS;
   pingTimer = setTimeout(() => {
     pingServer();
   }, interval);
@@ -122,21 +137,28 @@ function handleServerResult(reachable: boolean): void {
   const store = connectivityStore.getState();
   const wasReachable = store.isServerReachable;
 
-  store.setServerReachable(reachable);
-
   if (reachable) {
+    consecutiveFailures = 0;
+    store.setServerReachable(true);
     store.setInternetReachable(true);
-  }
 
-  if (reachable && !wasReachable && !initialCheck) {
-    clearReconnectedTimer();
-    store.setBannerState('reconnected');
-    reconnectedTimer = setTimeout(() => {
-      connectivityStore.getState().setBannerState('hidden');
-    }, RECONNECTED_DISPLAY_MS);
-  } else if (!reachable) {
-    clearReconnectedTimer();
-    store.setBannerState('unreachable');
+    if (!wasReachable && !initialCheck) {
+      // Genuine recovery from a previously-shown unreachable state.
+      clearReconnectedTimer();
+      store.setBannerState('reconnected');
+      reconnectedTimer = setTimeout(() => {
+        connectivityStore.getState().setBannerState('hidden');
+      }, RECONNECTED_DISPLAY_MS);
+    }
+  } else {
+    consecutiveFailures += 1;
+    // Debounce: a single failed ping doesn't flip state or surface the
+    // banner. Wait for FAILURE_THRESHOLD consecutive failures.
+    if (consecutiveFailures >= FAILURE_THRESHOLD) {
+      store.setServerReachable(false);
+      clearReconnectedTimer();
+      store.setBannerState('unreachable');
+    }
   }
 
   initialCheck = false;
@@ -146,6 +168,9 @@ function handleServerResult(reachable: boolean): void {
 
 function handleSslError(): void {
   const store = connectivityStore.getState();
+  // SSL errors are authoritative — surface immediately, don't debounce
+  // through the FAILURE_THRESHOLD ladder.
+  consecutiveFailures = FAILURE_THRESHOLD;
   store.setServerReachable(false);
   store.setBannerState('ssl-error');
   initialCheck = false;
@@ -195,6 +220,7 @@ export function startMonitoring(): void {
   initialCheck = true;
   pingInFlight = false;
   firstPingCompleted = false;
+  consecutiveFailures = 0;
 
   unsubscribeNetInfo = NetInfo.addEventListener(handleNetInfoChange);
 
@@ -224,6 +250,7 @@ export function stopMonitoring(): void {
   store.setBannerState('hidden');
   initialCheck = true;
   pingInFlight = false;
+  consecutiveFailures = 0;
   // Drain any pending awaitFirstPing waiters so they can re-check state
   // and bail rather than hanging until the next monitoring session.
   drainFirstPingWaiters();
