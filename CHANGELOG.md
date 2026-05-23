@@ -1,5 +1,9 @@
 # Changelog
 
+## [8.0.62] - 2026-05-23
+
+- fix(deps): restore node-addon-api — required by sharp's native install
+- ci: update coverage badge [skip ci]
 ## [8.0.61] - 2026-05-23
 
 - build(modules): discover tested modules dynamically instead of hardcoding
