@@ -9,7 +9,7 @@ Pod::Spec.new do |s|
   s.description    = 'Config-driven backup exclusion for cache and database folders'
   s.author         = 'Gaven Henry'
   s.homepage       = 'https://github.com/substreamer'
-  s.platforms      = { :ios => '15.1' }
+  s.platforms      = { :ios => '16.4' }
   s.source         = { git: 'https://github.com/substreamer/substreamer-rn.git', tag: s.version.to_s }
   s.static_framework = true
   s.license        = { :type => 'MIT' }
