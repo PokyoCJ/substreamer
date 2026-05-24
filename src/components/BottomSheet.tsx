@@ -38,6 +38,14 @@ interface BottomSheetProps {
    * after `onClose` runs into Android's "only one Modal at a time"
    * limitation; awaiting `onCloseComplete` instead is reliable without
    * hard-coded timeouts.
+   *
+   * **When to use:** any sheet whose handlers open a chained Modal in the
+   * SAME JSX tree — typically an inline `<ThemedAlert>` or an inline
+   * `<BottomSheet>`. Sheets that swap via a global Zustand store
+   * (e.g. opening `createShareStore.show(...)` after closing this one)
+   * don't need this — React only renders one global sheet at a time so
+   * Android never sees two stacked Modals. See `moreOptionsStore.hideAndAwait()`
+   * for the canonical await-based pattern.
    */
   onCloseComplete?: () => void;
   closeable?: boolean;
