@@ -190,21 +190,24 @@ export function AlbumDetailScreen() {
     return items;
   }, [allSongs]);
 
-  const androidHeaderInset = insets.top + HEADER_BAR_HEIGHT;
+  // Use paddingTop on contentContainerStyle for BOTH platforms. iOS used
+  // to combine contentInset.top + contentOffset.y = -inset to position
+  // content visually below the floating Stack.Toolbar, but RN 0.85's
+  // Fabric scroll-view recycles RCTScrollViewComponentView instances
+  // across screen pushes — and `contentOffset` (an initial-only prop)
+  // is not re-applied to a recycled instance. Result: the second push
+  // of any detail screen reused a recycled scroll view that ignored
+  // our initial offset, leaving the hero scrolled partly off the top.
+  // paddingTop is a content-side property that the layout engine
+  // applies regardless of recycle state, so behaviour is consistent
+  // on fresh AND recycled instances.
+  const headerInset = insets.top + HEADER_BAR_HEIGHT;
   const listContentContainerStyle = useMemo(
     () => ({
+      paddingTop: headerInset,
       paddingBottom: 32,
-      ...(Platform.OS !== 'ios' ? { paddingTop: androidHeaderInset } : undefined),
     }),
-    [androidHeaderInset],
-  );
-  const listContentInset = useMemo(
-    () => (Platform.OS === 'ios' ? { top: androidHeaderInset } : undefined),
-    [androidHeaderInset],
-  );
-  const listContentOffset = useMemo(
-    () => (Platform.OS === 'ios' ? { x: 0, y: -androidHeaderInset } : undefined),
-    [androidHeaderInset],
+    [headerInset],
   );
 
   const renderItem = useCallback(
@@ -432,8 +435,6 @@ export function AlbumDetailScreen() {
           onScrollBeginDrag={closeOpenRow}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={listContentContainerStyle}
-          contentInset={listContentInset}
-          contentOffset={listContentOffset}
           refreshControl={
             offlineMode ? undefined : (
               <RefreshControl
@@ -441,7 +442,7 @@ export function AlbumDetailScreen() {
                 refreshing={refreshing}
                 onRefresh={onRefresh}
                 tintColor={colors.primary}
-                progressViewOffset={Platform.OS === 'android' ? insets.top + HEADER_BAR_HEIGHT : 0}
+                progressViewOffset={headerInset}
               />
             )
           }

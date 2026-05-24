@@ -512,17 +512,17 @@ export function PlaylistDetailScreen() {
     { top: -insets.top, left: 0, right: 0, bottom: 0 },
   ];
 
+  // Unified paddingTop for iOS + Android. iOS previously used
+  // contentInset+contentOffset to position content under the floating
+  // Stack.Toolbar, but RN 0.85 Fabric recycles RCTScrollViewComponentView
+  // across screen pushes and ignores contentOffset on a recycled
+  // instance — leaving the hero partly scrolled off the top on
+  // subsequent detail pushes. See album-detail.tsx for the full
+  // explanation.
   const listContentStyle = {
+    paddingTop: insets.top + HEADER_BAR_HEIGHT,
     paddingBottom: 32,
-    ...(Platform.OS !== 'ios' ? { paddingTop: insets.top + HEADER_BAR_HEIGHT } : undefined),
   };
-
-  const iosInset =
-    Platform.OS === 'ios' ? { top: insets.top + HEADER_BAR_HEIGHT } : undefined;
-  const iosOffset =
-    Platform.OS === 'ios'
-      ? { x: 0, y: -(insets.top + HEADER_BAR_HEIGHT) }
-      : undefined;
 
   return (
     <>
@@ -589,8 +589,6 @@ export function PlaylistDetailScreen() {
           ListEmptyComponent={listEmpty}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={listContentStyle}
-          contentInset={iosInset}
-          contentOffset={iosOffset}
         />
       ) : (
         <FlashList
@@ -602,8 +600,6 @@ export function PlaylistDetailScreen() {
           onScrollBeginDrag={closeOpenRow}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={listContentStyle}
-          contentInset={iosInset}
-          contentOffset={iosOffset}
           refreshControl={
             offlineMode ? undefined : (
               <RefreshControl
@@ -611,7 +607,7 @@ export function PlaylistDetailScreen() {
                 refreshing={refreshing}
                 onRefresh={onRefresh}
                 tintColor={colors.primary}
-                progressViewOffset={Platform.OS === 'android' ? insets.top + HEADER_BAR_HEIGHT : 0}
+                progressViewOffset={insets.top + HEADER_BAR_HEIGHT}
               />
             )
           }
