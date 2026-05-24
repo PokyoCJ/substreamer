@@ -55,7 +55,7 @@ export interface AlbumListsState {
    * syncing without manual pull-to-refresh). Returns true if a refresh
    * was actually triggered.
    */
-  maybeRefreshAll: (minIntervalMs: number) => Promise<boolean>;
+  refreshAllIfDue: (minIntervalMs: number) => Promise<boolean>;
 }
 
 const PERSIST_KEY = 'substreamer-album-lists';
@@ -152,7 +152,7 @@ export const albumListsStore = create<AlbumListsState>()(
         }
       },
 
-      maybeRefreshAll: async (minIntervalMs: number) => {
+      refreshAllIfDue: async (minIntervalMs: number) => {
         // Gate 1: offline mode — never burn a network call when the user
         // has explicitly opted out of server traffic.
         if (offlineModeStore.getState().offlineMode) return false;

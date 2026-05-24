@@ -246,11 +246,11 @@ async function runDeferredStartup(getCancelled: () => boolean): Promise<void> {
 
   // Refresh the home-screen album lists at every cold-start so plays
   // from other clients show up without the user having to pull-to-
-  // refresh (#148). `maybeRefreshAll(0)` bypasses the
+  // refresh (#148). `refreshAllIfDue(0)` bypasses the
   // minimum-since-last-refresh check (we WANT a refresh on every
   // launch) but still respects offline mode and server reachability.
   await stage('refreshAlbumLists', async () => {
-    await albumListsStore.getState().maybeRefreshAll(0);
+    await albumListsStore.getState().refreshAllIfDue(0);
   });
 }
 
@@ -261,7 +261,7 @@ async function runDeferredStartup(getCancelled: () => boolean): Promise<void> {
  * refreshing on every short context-switch. Track-complete and
  * cold-start refreshes both bypass this threshold (see
  * `albumListsStore.refreshRecentlyPlayed` invocation in
- * `dataSyncService.onScrobbleCompleted`, and `maybeRefreshAll(0)`
+ * `dataSyncService.onScrobbleCompleted`, and `refreshAllIfDue(0)`
  * at boot above).
  */
 const FOREGROUND_REFRESH_THRESHOLD_MS = 10 * 60_000;
@@ -400,7 +400,7 @@ export default function RootLayout() {
         // Re-sync the home-screen album lists so plays from other
         // clients during backgrounding appear without a manual refresh
         // (#148). 10-minute threshold dedupes rapid foreground flips.
-        void albumListsStore.getState().maybeRefreshAll(FOREGROUND_REFRESH_THRESHOLD_MS);
+        void albumListsStore.getState().refreshAllIfDue(FOREGROUND_REFRESH_THRESHOLD_MS);
       }
     });
     return () => sub.remove();
