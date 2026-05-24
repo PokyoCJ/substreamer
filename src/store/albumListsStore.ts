@@ -12,7 +12,9 @@ import {
   getRecentlyPlayedAlbums,
   type AlbumID3,
 } from '../services/subsonicService';
+import { connectivityStore } from './connectivityStore';
 import { layoutPreferencesStore } from './layoutPreferencesStore';
+import { offlineModeStore } from './offlineModeStore';
 import { ratingStore } from './ratingStore';
 
 function reconcileAlbumRatings(albums: AlbumID3[]) {
@@ -31,6 +33,12 @@ export interface AlbumListsState {
   recentlyPlayed: AlbumID3[];
   frequentlyPlayed: AlbumID3[];
   randomSelection: AlbumID3[];
+  /**
+   * Wall-clock ms of the last successful full refresh. Persisted so a
+   * cold-start can decide whether the persisted lists are stale enough
+   * to warrant an auto-refresh.
+   */
+  lastRefreshedAt: number;
   setRecentlyAdded: (albums: AlbumID3[]) => void;
   setRecentlyPlayed: (albums: AlbumID3[]) => void;
   setFrequentlyPlayed: (albums: AlbumID3[]) => void;
@@ -40,6 +48,14 @@ export interface AlbumListsState {
   refreshFrequentlyPlayed: () => Promise<void>;
   refreshRandomSelection: () => Promise<void>;
   refreshAll: () => Promise<void>;
+  /**
+   * Refresh-all gated by minimum-interval-since-last-refresh, offline
+   * mode, and server reachability. Used for auto-refresh at app launch
+   * + AppState 'active' transitions — fixes #148 ("Recently Played" not
+   * syncing without manual pull-to-refresh). Returns true if a refresh
+   * was actually triggered.
+   */
+  maybeRefreshAll: (minIntervalMs: number) => Promise<boolean>;
 }
 
 const PERSIST_KEY = 'substreamer-album-lists';
@@ -51,6 +67,7 @@ export const albumListsStore = create<AlbumListsState>()(
       recentlyPlayed: [],
       frequentlyPlayed: [],
       randomSelection: [],
+      lastRefreshedAt: 0,
 
       setRecentlyAdded: (albums) => set({ recentlyAdded: albums }),
       setRecentlyPlayed: (albums) => set({ recentlyPlayed: albums }),
@@ -122,6 +139,7 @@ export const albumListsStore = create<AlbumListsState>()(
             recentlyPlayed,
             frequentlyPlayed,
             randomSelection,
+            lastRefreshedAt: Date.now(),
           });
           cacheEntityCoverArt([
             ...recentlyAdded,
@@ -133,6 +151,23 @@ export const albumListsStore = create<AlbumListsState>()(
           // Leave existing state on full refresh failure
         }
       },
+
+      maybeRefreshAll: async (minIntervalMs: number) => {
+        // Gate 1: offline mode — never burn a network call when the user
+        // has explicitly opted out of server traffic.
+        if (offlineModeStore.getState().offlineMode) return false;
+        // Gate 2: server reachability — skip if the connectivity layer
+        // already knows we can't talk to the server (avoids logging a
+        // failure for nothing).
+        const conn = connectivityStore.getState();
+        if (!conn.isInternetReachable || !conn.isServerReachable) return false;
+        // Gate 3: minimum-interval-since-last-refresh — back-to-back
+        // foreground/background flips shouldn't each kick a refresh.
+        const last = get().lastRefreshedAt;
+        if (last > 0 && Date.now() - last < minIntervalMs) return false;
+        await get().refreshAll();
+        return true;
+      },
     }),
     {
       name: PERSIST_KEY,
@@ -142,6 +177,7 @@ export const albumListsStore = create<AlbumListsState>()(
         recentlyPlayed: state.recentlyPlayed,
         frequentlyPlayed: state.frequentlyPlayed,
         randomSelection: state.randomSelection,
+        lastRefreshedAt: state.lastRefreshedAt,
       }),
     }
   )

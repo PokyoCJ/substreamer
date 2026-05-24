@@ -9,6 +9,16 @@ jest.mock('../layoutPreferencesStore', () => ({
   },
 }));
 
+const mockOffline = { offlineMode: false };
+jest.mock('../offlineModeStore', () => ({
+  offlineModeStore: { getState: () => mockOffline },
+}));
+
+const mockConnectivity = { isInternetReachable: true, isServerReachable: true };
+jest.mock('../connectivityStore', () => ({
+  connectivityStore: { getState: () => mockConnectivity },
+}));
+
 import {
   ensureCoverArtAuth,
   getRecentlyAddedAlbums,
@@ -32,7 +42,11 @@ beforeEach(() => {
     recentlyPlayed: [],
     frequentlyPlayed: [],
     randomSelection: [],
+    lastRefreshedAt: 0,
   });
+  mockOffline.offlineMode = false;
+  mockConnectivity.isInternetReachable = true;
+  mockConnectivity.isServerReachable = true;
 });
 
 describe('albumListsStore', () => {
@@ -145,6 +159,79 @@ describe('albumListsStore', () => {
       expect(mockGetRecentlyPlayed).toHaveBeenCalledWith(100);
       expect(mockGetFrequentlyPlayed).toHaveBeenCalledWith(100);
       expect(mockGetRandom).toHaveBeenCalledWith(100);
+    });
+  });
+
+  // #148 — home-screen lists weren't auto-refreshing on launch/foreground.
+  // maybeRefreshAll is the gated entry point: respects offline, server
+  // reachability, and a minimum-since-last-refresh interval to avoid
+  // refresh storms on background/foreground flips.
+  describe('maybeRefreshAll', () => {
+    beforeEach(() => {
+      mockGetRecentlyAdded.mockResolvedValue([]);
+      mockGetRecentlyPlayed.mockResolvedValue([]);
+      mockGetFrequentlyPlayed.mockResolvedValue([]);
+      mockGetRandom.mockResolvedValue([]);
+    });
+
+    it('refreshes and records lastRefreshedAt when never refreshed before', async () => {
+      const before = Date.now();
+      const ran = await albumListsStore.getState().maybeRefreshAll(60_000);
+      expect(ran).toBe(true);
+      expect(mockGetRecentlyAdded).toHaveBeenCalled();
+      expect(albumListsStore.getState().lastRefreshedAt).toBeGreaterThanOrEqual(before);
+    });
+
+    it('skips when offline mode is on', async () => {
+      mockOffline.offlineMode = true;
+      const ran = await albumListsStore.getState().maybeRefreshAll(60_000);
+      expect(ran).toBe(false);
+      expect(mockGetRecentlyAdded).not.toHaveBeenCalled();
+    });
+
+    it('skips when server is unreachable', async () => {
+      mockConnectivity.isServerReachable = false;
+      const ran = await albumListsStore.getState().maybeRefreshAll(60_000);
+      expect(ran).toBe(false);
+      expect(mockGetRecentlyAdded).not.toHaveBeenCalled();
+    });
+
+    it('skips when internet is unreachable', async () => {
+      mockConnectivity.isInternetReachable = false;
+      const ran = await albumListsStore.getState().maybeRefreshAll(60_000);
+      expect(ran).toBe(false);
+      expect(mockGetRecentlyAdded).not.toHaveBeenCalled();
+    });
+
+    it('skips when last refresh was within the interval', async () => {
+      // Pretend we just refreshed 1s ago, interval is 60s.
+      albumListsStore.setState({ lastRefreshedAt: Date.now() - 1_000 });
+      const ran = await albumListsStore.getState().maybeRefreshAll(60_000);
+      expect(ran).toBe(false);
+      expect(mockGetRecentlyAdded).not.toHaveBeenCalled();
+    });
+
+    it('refreshes when last refresh was longer ago than the interval', async () => {
+      // 10 minutes ago, interval 5 minutes.
+      albumListsStore.setState({ lastRefreshedAt: Date.now() - 10 * 60_000 });
+      const ran = await albumListsStore.getState().maybeRefreshAll(5 * 60_000);
+      expect(ran).toBe(true);
+      expect(mockGetRecentlyAdded).toHaveBeenCalled();
+    });
+
+    it('bypasses the time gate when interval is 0 (boot path)', async () => {
+      // Just refreshed 1ms ago — interval 0 means "always go".
+      albumListsStore.setState({ lastRefreshedAt: Date.now() - 1 });
+      const ran = await albumListsStore.getState().maybeRefreshAll(0);
+      expect(ran).toBe(true);
+      expect(mockGetRecentlyAdded).toHaveBeenCalled();
+    });
+
+    it('still respects offline mode when interval is 0', async () => {
+      mockOffline.offlineMode = true;
+      const ran = await albumListsStore.getState().maybeRefreshAll(0);
+      expect(ran).toBe(false);
+      expect(mockGetRecentlyAdded).not.toHaveBeenCalled();
     });
   });
 

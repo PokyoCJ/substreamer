@@ -76,6 +76,7 @@ import { startAutoOffline, stopAutoOffline } from '../services/autoOfflineServic
 import { excludeFromBackup } from 'expo-backup-exclusions';
 import { moveToBack } from 'expo-move-to-back';
 import { rehydrateAllStores } from '../store/persistence/rehydrate';
+import { albumListsStore } from '../store/albumListsStore';
 import { musicCacheStore } from '../store/musicCacheStore';
 import { authStore } from '../store/authStore';
 import { autoOfflineStore } from '../store/autoOfflineStore';
@@ -242,7 +243,28 @@ async function runDeferredStartup(getCancelled: () => boolean): Promise<void> {
   // Both stages are no-ops when there's nothing to do.
   await stage('recoverStalledImageDownloads', () => recoverStalledImageDownloads());
   await stage('processImageQueue', () => processImageQueue());
+
+  // Refresh the home-screen album lists at every cold-start so plays
+  // from other clients show up without the user having to pull-to-
+  // refresh (#148). `maybeRefreshAll(0)` bypasses the
+  // minimum-since-last-refresh check (we WANT a refresh on every
+  // launch) but still respects offline mode and server reachability.
+  await stage('refreshAlbumLists', async () => {
+    await albumListsStore.getState().maybeRefreshAll(0);
+  });
 }
+
+/**
+ * Minimum gap between auto-refreshes triggered by AppState 'active'
+ * transitions. Ten minutes covers the common "background music for
+ * a while" and "flick out to read a message" patterns without
+ * refreshing on every short context-switch. Track-complete and
+ * cold-start refreshes both bypass this threshold (see
+ * `albumListsStore.refreshRecentlyPlayed` invocation in
+ * `dataSyncService.onScrobbleCompleted`, and `maybeRefreshAll(0)`
+ * at boot above).
+ */
+const FOREGROUND_REFRESH_THRESHOLD_MS = 10 * 60_000;
 
 export default function RootLayout() {
   const [splashVisible, setSplashVisible] = useState(true);
@@ -375,6 +397,10 @@ export default function RootLayout() {
         // Resume image-cache draining if a cycle is mid-flight and the
         // user hasn't explicitly paused it. Respects isPaused internally.
         void processImageQueue();
+        // Re-sync the home-screen album lists so plays from other
+        // clients during backgrounding appear without a manual refresh
+        // (#148). 10-minute threshold dedupes rapid foreground flips.
+        void albumListsStore.getState().maybeRefreshAll(FOREGROUND_REFRESH_THRESHOLD_MS);
       }
     });
     return () => sub.remove();
