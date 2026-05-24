@@ -1,5 +1,42 @@
 # Changelog
 
+## [8.0.63] - 2026-05-24
+
+- ci: update coverage badge [skip ci]
+- refactor(settings): move Metadata Refresh + Artist Play Mode to better homes
+- chore(deps): SDK 56 patch bumps + safe minor/patch updates
+- build(metro): add default metro.config.js to satisfy expo-doctor
+- refactor(album-lists): rename maybeRefreshAll → refreshAllIfDue
+- feat(home): auto-refresh album lists on launch + foreground
+- feat(share): add single-song sharing to the more-options menu
+- fix(stale-id): persist queue after reactive recovery so restarts don't re-recover
+- fix(stale-id): conservative defaults for metadata-refresh threshold
+- feat(stale-id): proactive metadata refresh before queue load
+- feat(stale-id): persist album-wide recovery on stream-failure self-heal
+- fix(player): self-heal stale song IDs on playback failure
+- docs(bottom-sheet): clarify when onCloseComplete is needed (audit follow-up)
+- fix(more-options): await BottomSheet teardown before opening chained modals
+- fix(more-options): top up 'Play More Like This' with layered fallbacks
+- fix(tuned-in): honour era filter in Build-A-Mix when no genres selected
+- fix(image-cache): center the refreshing-progress text
+- fix(image-cache): hide in-flight covers from incomplete count + tidy refresh UI
+- fix(ios): bump local-module podspecs to iOS 16.4
+- feat(image-cache): Phase 5 — settings UI overhaul
+- feat(image-cache): Phase 4 — drop legacy cover-art-recache kvStorage blob
+- feat(image-cache): Phase 3 — store + banner rename + cutover
+- feat(image-cache): Phase 2 — queue worker + recovery + pause/resume/cancel
+- feat(image-cache): Phase 1 — persistent download-queue table
+- fix(cover-art-recache): include per-song covers (downloaded playlists)
+- fix(connectivity): debounce server-unreachable banner
+- fix(home): add drawDistance to horizontal FlashLists
+- fix(home): genre chips disappearing until app restart
+- refactor(cover-art-recache): move banner to BannerStack as a pill
+- chore(deps): upgrade TypeScript 5.9.3 → 6.0.3
+- refactor(icons): migrate @expo/vector-icons → @react-native-vector-icons/*
+- build(android): opt into expo-build-properties usePrecompiledHeaders
+- fix(patches): rebase patch-package patches onto RN 0.85.3 + screens 4.25.2
+- chore(deps): upgrade to Expo SDK 56 / React Native 0.85.3
+- ci: update coverage badge [skip ci]
 ## [8.0.62] - 2026-05-23
 
 - fix(deps): restore node-addon-api — required by sharp's native install
