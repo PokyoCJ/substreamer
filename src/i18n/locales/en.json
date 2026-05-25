@@ -122,6 +122,8 @@
   "activeServerSecondary": "Secondary",
   "switchToPrimary": "Switch to Primary",
   "switchToSecondary": "Switch to Secondary",
+  "switchedToPrimary": "Switched back to primary server",
+  "switchedToSecondary": "Switched to secondary server",
   "serverUrlEditPrompt": "Change the address of your music server (for example if its IP address has changed). Test the new URL first — it has to respond as a valid Subsonic server before you can save. Saving will stop playback and clear the current play queue.",
   "serverUrlChangeWarningTitle": "Change server URL?",
   "serverUrlChangeWarning": "This will stop playback and clear the current play queue. Continue?",
