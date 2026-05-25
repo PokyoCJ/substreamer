@@ -2293,6 +2293,36 @@ const MIGRATION_TASKS: MigrationTask[] = [
     },
   },
 
+  {
+    id: 25,
+    name: 'Wipe image cache for entity-ID cover-art model',
+    run: async (log) => {
+      // Cover-art lookups now key off entity IDs (album.id, artist.id,
+      // playlist.id, song.albumId) instead of the server-supplied
+      // `coverArt` field. The pre-migration cache holds files keyed by
+      // server-specific IDs that no consumer queries any more — Navidrome
+      // `_<digit>` per-track variants, `_<hex>` content-hash versions,
+      // orphan suffix-stripped rows from the old migrate-22 attempt. All
+      // dead weight that actively confuses the cache (broken parent rows
+      // were causing CachedImage errorSuppress to latch placeholders).
+      //
+      // Wiping the entire cache here is safe — on-demand re-fetch via
+      // CachedImage's existing debounce will repopulate with the new
+      // entity-ID-keyed files as soon as the user lands on a screen. For
+      // offline-first users, "Settings → Storage → Refresh covers for
+      // downloaded music" eager-repopulates while online.
+      try {
+        const { clearImageCache } = require('./imageCacheService') as {
+          clearImageCache: () => Promise<number>;
+        };
+        const freed = await clearImageCache();
+        log(`[m25] wiped image cache, freed=${freed} bytes`);
+      } catch (e) {
+        log(`[m25] wipe failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+  },
+
   // -------------------------------------------------------------------
   // TEMPLATE – How to add a new migration task:
   //
