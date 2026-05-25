@@ -1,5 +1,5 @@
 import { memo, useEffect } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, withDelay, withTiming } from 'react-native-reanimated';
 
 import { CachedImage } from './CachedImage';
@@ -18,6 +18,8 @@ interface TopItemRowProps {
   /** Initials shown when no coverArt (e.g. for artists). */
   initials?: string;
   index: number;
+  /** Tap handler. When omitted, the row is non-interactive (no press feedback). */
+  onPress?: () => void;
 }
 
 export const TopItemRow = memo(function TopItemRow({
@@ -30,6 +32,7 @@ export const TopItemRow = memo(function TopItemRow({
   colors,
   initials,
   index,
+  onPress,
 }: TopItemRowProps) {
   const barWidth = useSharedValue(0);
   const proportion = maxCount > 0 ? count / maxCount : 0;
@@ -42,8 +45,8 @@ export const TopItemRow = memo(function TopItemRow({
     width: `${barWidth.value}%` as unknown as number,
   }));
 
-  return (
-    <View style={[styles.row, { borderBottomColor: colors.border }]}>
+  const content = (
+    <>
       <Text style={[styles.rank, { color: colors.textSecondary }]}>{rank}</Text>
 
       {coverArtId ? (
@@ -74,6 +77,27 @@ export const TopItemRow = memo(function TopItemRow({
       </View>
 
       <Text style={[styles.count, { color: colors.textSecondary }]}>{count}</Text>
+    </>
+  );
+
+  if (onPress) {
+    return (
+      <Pressable
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.row,
+          { borderBottomColor: colors.border },
+          pressed && { opacity: 0.6 },
+        ]}
+      >
+        {content}
+      </Pressable>
+    );
+  }
+
+  return (
+    <View style={[styles.row, { borderBottomColor: colors.border }]}>
+      {content}
     </View>
   );
 });

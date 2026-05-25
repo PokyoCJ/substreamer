@@ -180,7 +180,7 @@ interface GenerateMixesInput {
   hourBuckets: number[];
   genreCounts: Record<string, number>;
   songCounts: Record<string, { song: Child; count: number }>;
-  artistCounts: Record<string, number>;
+  artistCounts: Record<string, { count: number; artistId?: string }>;
   scrobbles: Array<{ time: number; song: { genre?: string; genres?: unknown[]; artist?: string; artistId?: string } }>;
   starredSongs: Child[];
   isOnline: boolean;
@@ -234,7 +234,7 @@ export function generateMixes(input: GenerateMixesInput): MixDefinition[] {
 
     const artistCandidates = Object.entries(artistCounts)
       .filter(([name]) => artistIdMap.has(name))
-      .map(([name, count]) => ({ name, artistId: artistIdMap.get(name)!, count }));
+      .map(([name, val]) => ({ name, artistId: artistIdMap.get(name)!, count: val.count }));
 
     if (artistCandidates.length > 0) {
       // Include "Surprise Me" fallback weighted at the average

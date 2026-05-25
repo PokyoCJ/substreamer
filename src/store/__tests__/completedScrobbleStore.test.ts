@@ -173,8 +173,8 @@ describe('aggregates – incremental updates', () => {
     completedScrobbleStore.getState().addCompleted(validScrobble({ id: '3', song: { id: 's3', title: 'C', artist: 'ArtistY', duration: 100 } as any }));
 
     const { aggregates } = completedScrobbleStore.getState();
-    expect(aggregates.artistCounts['ArtistX']).toBe(2);
-    expect(aggregates.artistCounts['ArtistY']).toBe(1);
+    expect(aggregates.artistCounts['ArtistX'].count).toBe(2);
+    expect(aggregates.artistCounts['ArtistY'].count).toBe(1);
   });
 
   it('updates albumCounts incrementally', () => {
@@ -258,7 +258,7 @@ describe('aggregates – incremental updates', () => {
     completedScrobbleStore.getState().addCompleted(validScrobble({ id: '1', song: { id: 's1', title: 'A' } as any }));
 
     const { aggregates } = completedScrobbleStore.getState();
-    expect(aggregates.artistCounts['Unknown']).toBe(1);
+    expect(aggregates.artistCounts['Unknown'].count).toBe(1);
   });
 
   it('does not update aggregates on rejected scrobble', () => {
@@ -350,7 +350,7 @@ describe('rebuildAggregates', () => {
     completedScrobbleStore.getState().rebuildAggregates();
 
     const { aggregates } = completedScrobbleStore.getState();
-    expect(aggregates.artistCounts['Art']).toBe(2);
+    expect(aggregates.artistCounts['Art'].count).toBe(2);
     expect(aggregates.albumCounts['Alb::Art'].count).toBe(2);
     expect(aggregates.songCounts['s1'].count).toBe(1);
     expect(aggregates.songCounts['s2'].count).toBe(1);
@@ -424,7 +424,7 @@ describe('hydrateFromDb', () => {
     expect(state.completedScrobbles).toEqual(rows);
     expect(state.stats.totalPlays).toBe(2);
     expect(state.stats.totalListeningSeconds).toBe(300);
-    expect(state.aggregates.artistCounts['Art']).toBe(2);
+    expect(state.aggregates.artistCounts['Art'].count).toBe(2);
     expect(state.aggregates.dayCounts['2025-01-15']).toBe(2);
   });
 
@@ -474,7 +474,7 @@ describe('replaceAll', () => {
     expect(state.completedScrobbles).toEqual(scrobbles);
     expect(state.stats.totalPlays).toBe(2);
     expect(state.stats.totalListeningSeconds).toBe(300);
-    expect(state.aggregates.artistCounts['Art']).toBe(2);
+    expect(state.aggregates.artistCounts['Art'].count).toBe(2);
   });
 
   it('drops invalid records and dedupes before writing to SQL', () => {

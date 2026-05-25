@@ -507,8 +507,8 @@ describe('usePlaybackAnalytics with aggregates', () => {
   ];
 
   function buildAggregatesFromScrobbles(records: ScrobbleRecord[]): AnalyticsAggregates {
-    const artistCounts: Record<string, number> = {};
-    const albumCounts: Record<string, { artist: string; coverArt?: string; count: number }> = {};
+    const artistCounts: Record<string, { count: number; artistId?: string }> = {};
+    const albumCounts: Record<string, { artist: string; coverArt?: string; count: number; albumId?: string }> = {};
     const songCounts: Record<string, { song: ScrobbleRecord['song']; count: number }> = {};
     const genreCounts: Record<string, number> = {};
     const hourBuckets = new Array<number>(24).fill(0);
@@ -516,15 +516,27 @@ describe('usePlaybackAnalytics with aggregates', () => {
 
     for (const s of records) {
       const artist = s.song.artist ?? 'Unknown';
-      artistCounts[artist] = (artistCounts[artist] ?? 0) + 1;
+      const existingArtist = artistCounts[artist];
+      if (existingArtist) {
+        existingArtist.count++;
+        if (!existingArtist.artistId && s.song.artistId) existingArtist.artistId = s.song.artistId;
+      } else {
+        artistCounts[artist] = { count: 1, artistId: s.song.artistId ?? undefined };
+      }
 
       const albumKey = `${s.song.album ?? 'Unknown'}::${artist}`;
       const existing = albumCounts[albumKey];
       if (existing) {
         existing.count++;
         if (s.song.coverArt) existing.coverArt = s.song.coverArt;
+        if (!existing.albumId && s.song.albumId) existing.albumId = s.song.albumId;
       } else {
-        albumCounts[albumKey] = { artist, coverArt: s.song.coverArt ?? undefined, count: 1 };
+        albumCounts[albumKey] = {
+          artist,
+          coverArt: s.song.coverArt ?? undefined,
+          count: 1,
+          albumId: s.song.albumId ?? undefined,
+        };
       }
 
       const existingSong = songCounts[s.song.id];

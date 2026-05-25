@@ -256,7 +256,7 @@ describe('generateMixes', () => {
     hourBuckets: new Array(24).fill(0),
     genreCounts: {} as Record<string, number>,
     songCounts: {} as Record<string, { song: Child; count: number }>,
-    artistCounts: {} as Record<string, number>,
+    artistCounts: {} as Record<string, { count: number; artistId?: string }>,
     scrobbles: [] as any[],
     starredSongs: [] as Child[],
     isOnline: true,
@@ -286,7 +286,7 @@ describe('generateMixes', () => {
   it('uses similarToArtist or Surprise Me when artist has artistId (weighted random)', () => {
     const input = {
       ...baseInput,
-      artistCounts: { 'Pink Floyd': 20 },
+      artistCounts: { 'Pink Floyd': { count: 20, artistId: 'ar-1' } },
       scrobbles: [
         { time: Date.now(), song: { artist: 'Pink Floyd', artistId: 'ar-1', genre: 'Rock' } },
       ],

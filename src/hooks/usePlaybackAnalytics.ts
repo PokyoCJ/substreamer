@@ -25,6 +25,8 @@ export interface TopSong {
 export interface TopArtist {
   artist: string;
   count: number;
+  /** Subsonic artistId when known; absent for old aggregate rows or scrobbles without artistId. */
+  artistId?: string;
 }
 
 export interface TopAlbum {
@@ -32,6 +34,8 @@ export interface TopAlbum {
   artist: string;
   coverArt?: string;
   count: number;
+  /** Subsonic albumId when known; absent for old aggregate rows or scrobbles without albumId. */
+  albumId?: string;
 }
 
 export interface GenreSlice {
@@ -240,7 +244,7 @@ export function usePlaybackAnalytics(
         .slice(0, 10);
 
       const topArtists = Object.entries(aggregates.artistCounts)
-        .map(([artist, count]) => ({ artist, count }))
+        .map(([artist, val]) => ({ artist, count: val.count, artistId: val.artistId }))
         .sort((a, b) => b.count - a.count)
         .slice(0, 10);
 
@@ -250,6 +254,7 @@ export function usePlaybackAnalytics(
           artist: val.artist,
           coverArt: val.coverArt,
           count: val.count,
+          albumId: val.albumId,
         }))
         .sort((a, b) => b.count - a.count)
         .slice(0, 5);
@@ -295,8 +300,8 @@ export function usePlaybackAnalytics(
     const totalPlays = filtered.length;
 
     let totalListeningSeconds = 0;
-    const artistCounts = new Map<string, number>();
-    const albumCounts = new Map<string, { artist: string; coverArt?: string; count: number }>();
+    const artistCounts = new Map<string, { count: number; artistId?: string }>();
+    const albumCounts = new Map<string, { artist: string; coverArt?: string; count: number; albumId?: string }>();
     const songCounts = new Map<string, { song: Child; count: number }>();
     const genreCounts = new Map<string, number>();
     const hourBuckets = new Array<number>(24).fill(0);
@@ -308,18 +313,28 @@ export function usePlaybackAnalytics(
       }
 
       const artist = s.song.artist ?? 'Unknown';
-      artistCounts.set(artist, (artistCounts.get(artist) ?? 0) + 1);
+      const existingArtist = artistCounts.get(artist);
+      if (existingArtist) {
+        existingArtist.count++;
+        if (!existingArtist.artistId && s.song.artistId) {
+          existingArtist.artistId = s.song.artistId;
+        }
+      } else {
+        artistCounts.set(artist, { count: 1, artistId: s.song.artistId ?? undefined });
+      }
 
       const albumKey = `${s.song.album ?? 'Unknown'}::${artist}`;
       const existing = albumCounts.get(albumKey);
       if (existing) {
         existing.count++;
         if (s.song.coverArt) existing.coverArt = s.song.coverArt;
+        if (!existing.albumId && s.song.albumId) existing.albumId = s.song.albumId;
       } else {
         albumCounts.set(albumKey, {
           artist,
           coverArt: s.song.coverArt ?? undefined,
           count: 1,
+          albumId: s.song.albumId ?? undefined,
         });
       }
 
@@ -348,7 +363,7 @@ export function usePlaybackAnalytics(
       .slice(0, 10);
 
     const topArtists = Array.from(artistCounts.entries())
-      .map(([artist, count]) => ({ artist, count }))
+      .map(([artist, val]) => ({ artist, count: val.count, artistId: val.artistId }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 10);
 
@@ -358,6 +373,7 @@ export function usePlaybackAnalytics(
         artist: val.artist,
         coverArt: val.coverArt,
         count: val.count,
+        albumId: val.albumId,
       }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 5);

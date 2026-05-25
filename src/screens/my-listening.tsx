@@ -1,4 +1,5 @@
 import Ionicons from "@react-native-vector-icons/ionicons/static";
+import { useRouter } from 'expo-router';
 import { HeaderHeightContext } from "expo-router/react-navigation";
 import i18next from 'i18next';
 import { useCallback, useContext, useMemo, useState } from 'react';
@@ -19,9 +20,13 @@ import { usePlaybackAnalytics, type TimePeriod } from '../hooks/usePlaybackAnaly
 import { useRefreshControlKey } from '../hooks/useRefreshControlKey';
 import { useTheme } from '../hooks/useTheme';
 import { useTransitionComplete } from '../hooks/useTransitionComplete';
+import { playTrack } from '../services/playerService';
+import { type Child } from '../services/subsonicService';
 import { completedScrobbleStore } from '../store/completedScrobbleStore';
 import { layoutPreferencesStore } from '../store/layoutPreferencesStore';
+import { offlineModeStore } from '../store/offlineModeStore';
 import { pendingScrobbleStore } from '../store/pendingScrobbleStore';
+import { fireAndForget } from '../utils/fireAndForget';
 import { getDateTimeFormat } from '../utils/intl';
 import { getArtistInitials, minDelay, timeAgo } from '../utils/stringHelpers';
 
@@ -57,9 +62,74 @@ function formatHour(hour: number): string {
 }
 
 
+interface ScrobbleRowProps {
+  song: Child;
+  time: number;
+  onPress?: () => void;
+  showAlbumInSubtitle?: boolean;
+}
+
+function ScrobbleRow({ song, time, onPress, showAlbumInSubtitle }: ScrobbleRowProps) {
+  const { colors } = useTheme();
+  const { t } = useTranslation();
+
+  const subtitle = showAlbumInSubtitle
+    ? `${song.artist ?? t('unknownArtist')} — ${song.album ?? t('unknownAlbum')}`
+    : (song.artist ?? t('unknownArtist'));
+
+  const content = (
+    <>
+      {song.coverArt && (
+        <CachedImage
+          coverArtId={song.coverArt}
+          size={150}
+          style={styles.recentThumb}
+          resizeMode="cover"
+        />
+      )}
+      <View style={styles.recentInfo}>
+        <Text style={[styles.recentTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+          {song.title}
+        </Text>
+        <Text
+          style={[styles.recentSubtitle, { color: colors.textSecondary }]}
+          numberOfLines={1}
+        >
+          {subtitle}
+        </Text>
+      </View>
+      <Text style={[styles.recentTime, { color: colors.textSecondary }]}>
+        {timeAgo(time, t)}
+      </Text>
+    </>
+  );
+
+  if (onPress) {
+    return (
+      <Pressable
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.recentRow,
+          { borderBottomColor: colors.border },
+          pressed && { opacity: 0.6 },
+        ]}
+      >
+        {content}
+      </Pressable>
+    );
+  }
+
+  return (
+    <View style={[styles.recentRow, { borderBottomColor: colors.border }]}>
+      {content}
+    </View>
+  );
+}
+
 export function MyListeningScreen() {
   const { colors } = useTheme();
   const { t } = useTranslation();
+  const router = useRouter();
   const transitionComplete = useTransitionComplete();
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
   const refreshControlKey = useRefreshControlKey();
@@ -71,6 +141,7 @@ export function MyListeningScreen() {
   const pendingScrobbles = pendingScrobbleStore((s) => s.pendingScrobbles);
   const aggregates = completedScrobbleStore((s) => s.aggregates);
   const dateFormat = layoutPreferencesStore((s) => s.dateFormat);
+  const offlineMode = offlineModeStore((s) => s.offlineMode);
 
   const analytics = usePlaybackAnalytics(completedScrobbles, period, pendingScrobbles, aggregates);
 
@@ -85,6 +156,33 @@ export function MyListeningScreen() {
     await delay;
     setRefreshing(false);
   }, []);
+
+  // Tap handlers for the various item rows. All return `undefined` when
+  // offline so callers can pass the value straight through to TopItemRow's
+  // `onPress`, which collapses to a non-interactive View when omitted.
+  const onPlaySong = useCallback(
+    (song: Child) => {
+      if (offlineMode) return undefined;
+      return () => fireAndForget(playTrack(song, [song]), 'my-listening:playSong');
+    },
+    [offlineMode],
+  );
+
+  const onOpenAlbum = useCallback(
+    (albumId: string | undefined) => {
+      if (offlineMode || !albumId) return undefined;
+      return () => router.push(`/album/${albumId}`);
+    },
+    [offlineMode, router],
+  );
+
+  const onOpenArtist = useCallback(
+    (artistId: string | undefined) => {
+      if (offlineMode || !artistId) return undefined;
+      return () => router.push(`/artist/${artistId}`);
+    },
+    [offlineMode, router],
+  );
 
   if (!transitionComplete) {
     return (
@@ -248,6 +346,7 @@ export function MyListeningScreen() {
               coverArtId={item.song.coverArt ?? undefined}
               colors={colors}
               index={i}
+              onPress={onPlaySong(item.song)}
             />
           ))}
         </View>
@@ -267,6 +366,7 @@ export function MyListeningScreen() {
               colors={colors}
               initials={getArtistInitials(item.artist)}
               index={i}
+              onPress={onOpenArtist(item.artistId)}
             />
           ))}
         </View>
@@ -287,6 +387,7 @@ export function MyListeningScreen() {
               coverArtId={item.coverArt}
               colors={colors}
               index={i}
+              onPress={onOpenAlbum(item.albumId)}
             />
           ))}
         </View>
@@ -325,30 +426,12 @@ export function MyListeningScreen() {
             {t('waitingToBeSubmitted')}
           </Text>
           {[...pendingScrobbles].reverse().slice(0, 10).map((s) => (
-            <View key={s.id} style={[styles.recentRow, { borderBottomColor: colors.border }]}>
-              {s.song.coverArt && (
-                <CachedImage
-                  coverArtId={s.song.coverArt}
-                  size={150}
-                  style={styles.recentThumb}
-                  resizeMode="cover"
-                />
-              )}
-              <View style={styles.recentInfo}>
-                <Text style={[styles.recentTitle, { color: colors.textPrimary }]} numberOfLines={1}>
-                  {s.song.title}
-                </Text>
-                <Text
-                  style={[styles.recentSubtitle, { color: colors.textSecondary }]}
-                  numberOfLines={1}
-                >
-                  {s.song.artist ?? t('unknownArtist')}
-                </Text>
-              </View>
-              <Text style={[styles.recentTime, { color: colors.textSecondary }]}>
-                {timeAgo(s.time, t)}
-              </Text>
-            </View>
+            <ScrobbleRow
+              key={s.id}
+              song={s.song}
+              time={s.time}
+              onPress={onPlaySong(s.song)}
+            />
           ))}
         </View>
       )}
@@ -358,30 +441,13 @@ export function MyListeningScreen() {
         <View style={[styles.section, styles.card, { backgroundColor: colors.card }]}>
           <SectionTitle title={t('recentPlays')} color={colors.textSecondary} />
           {recentScrobbles.map((s) => (
-            <View key={s.id} style={[styles.recentRow, { borderBottomColor: colors.border }]}>
-              {s.song.coverArt && (
-                <CachedImage
-                  coverArtId={s.song.coverArt}
-                  size={150}
-                  style={styles.recentThumb}
-                  resizeMode="cover"
-                />
-              )}
-              <View style={styles.recentInfo}>
-                <Text style={[styles.recentTitle, { color: colors.textPrimary }]} numberOfLines={1}>
-                  {s.song.title}
-                </Text>
-                <Text
-                  style={[styles.recentSubtitle, { color: colors.textSecondary }]}
-                  numberOfLines={1}
-                >
-                  {s.song.artist ?? t('unknownArtist')} — {s.song.album ?? t('unknownAlbum')}
-                </Text>
-              </View>
-              <Text style={[styles.recentTime, { color: colors.textSecondary }]}>
-                {timeAgo(s.time, t)}
-              </Text>
-            </View>
+            <ScrobbleRow
+              key={s.id}
+              song={s.song}
+              time={s.time}
+              onPress={onPlaySong(s.song)}
+              showAlbumInSubtitle
+            />
           ))}
         </View>
       )}

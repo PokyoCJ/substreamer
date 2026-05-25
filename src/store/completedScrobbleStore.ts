@@ -27,8 +27,8 @@ export interface ListeningStats {
 }
 
 export interface AnalyticsAggregates {
-  artistCounts: Record<string, number>;
-  albumCounts: Record<string, { artist: string; coverArt?: string; count: number }>;
+  artistCounts: Record<string, { count: number; artistId?: string }>;
+  albumCounts: Record<string, { artist: string; coverArt?: string; count: number; albumId?: string }>;
   songCounts: Record<string, { song: Child; count: number }>;
   genreCounts: Record<string, number>;
   hourBuckets: number[];
@@ -98,8 +98,8 @@ function buildStats(scrobbles: CompletedScrobble[]): ListeningStats {
 }
 
 function buildAggregates(scrobbles: CompletedScrobble[]): AnalyticsAggregates {
-  const artistCounts: Record<string, number> = {};
-  const albumCounts: Record<string, { artist: string; coverArt?: string; count: number }> = {};
+  const artistCounts: Record<string, { count: number; artistId?: string }> = {};
+  const albumCounts: Record<string, { artist: string; coverArt?: string; count: number; albumId?: string }> = {};
   const songCounts: Record<string, { song: Child; count: number }> = {};
   const genreCounts: Record<string, number> = {};
   const hourBuckets = new Array<number>(24).fill(0);
@@ -107,15 +107,33 @@ function buildAggregates(scrobbles: CompletedScrobble[]): AnalyticsAggregates {
 
   for (const s of scrobbles) {
     const artist = s.song.artist ?? 'Unknown';
-    artistCounts[artist] = (artistCounts[artist] ?? 0) + 1;
+    const existingArtist = artistCounts[artist];
+    if (existingArtist) {
+      existingArtist.count++;
+      // Capture artistId opportunistically: rows from older app versions
+      // may lack it; the first scrobble that carries one wins.
+      if (!existingArtist.artistId && s.song.artistId) {
+        existingArtist.artistId = s.song.artistId;
+      }
+    } else {
+      artistCounts[artist] = { count: 1, artistId: s.song.artistId ?? undefined };
+    }
 
     const albumKey = `${s.song.album ?? 'Unknown'}::${artist}`;
     const existingAlbum = albumCounts[albumKey];
     if (existingAlbum) {
       existingAlbum.count++;
       if (s.song.coverArt) existingAlbum.coverArt = s.song.coverArt;
+      if (!existingAlbum.albumId && s.song.albumId) {
+        existingAlbum.albumId = s.song.albumId;
+      }
     } else {
-      albumCounts[albumKey] = { artist, coverArt: s.song.coverArt ?? undefined, count: 1 };
+      albumCounts[albumKey] = {
+        artist,
+        coverArt: s.song.coverArt ?? undefined,
+        count: 1,
+        albumId: s.song.albumId ?? undefined,
+      };
     }
 
     const existingSong = songCounts[s.song.id];
@@ -171,15 +189,34 @@ export const completedScrobbleStore = create<CompletedScrobbleState>()((set, get
     // Incremental aggregate updates
     const agg = state.aggregates;
     const artistName = artist ?? 'Unknown';
-    const newArtistCounts = { ...agg.artistCounts, [artistName]: (agg.artistCounts[artistName] ?? 0) + 1 };
+    const existingArtistEntry = agg.artistCounts[artistName];
+    const newArtistCounts = {
+      ...agg.artistCounts,
+      [artistName]: existingArtistEntry
+        ? {
+            count: existingArtistEntry.count + 1,
+            artistId: existingArtistEntry.artistId ?? scrobble.song.artistId ?? undefined,
+          }
+        : { count: 1, artistId: scrobble.song.artistId ?? undefined },
+    };
 
     const albumKey = `${scrobble.song.album ?? 'Unknown'}::${artistName}`;
     const existingAlbum = agg.albumCounts[albumKey];
     const newAlbumCounts = {
       ...agg.albumCounts,
       [albumKey]: existingAlbum
-        ? { ...existingAlbum, count: existingAlbum.count + 1, coverArt: scrobble.song.coverArt ?? existingAlbum.coverArt }
-        : { artist: artistName, coverArt: scrobble.song.coverArt ?? undefined, count: 1 },
+        ? {
+            ...existingAlbum,
+            count: existingAlbum.count + 1,
+            coverArt: scrobble.song.coverArt ?? existingAlbum.coverArt,
+            albumId: existingAlbum.albumId ?? scrobble.song.albumId ?? undefined,
+          }
+        : {
+            artist: artistName,
+            coverArt: scrobble.song.coverArt ?? undefined,
+            count: 1,
+            albumId: scrobble.song.albumId ?? undefined,
+          },
     };
 
     const existingSong = agg.songCounts[scrobble.song.id];
