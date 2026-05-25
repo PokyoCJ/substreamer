@@ -155,6 +155,30 @@ export function clearApiCache(): void {
   cachedCoverArtToken = null;
 }
 
+/**
+ * Build a one-shot `SubsonicAPI` instance bound to an arbitrary URL with
+ * the current authStore credentials. Used by the failover service to
+ * health-check either server (primary or secondary) without touching
+ * the cached client — the cache is keyed by the ACTIVE URL and would
+ * thrash if we used it for cross-URL pings.
+ *
+ * Returns `null` when there's no active session to borrow credentials
+ * from. Caller is responsible for `api.ping()` + timeout handling.
+ */
+export function buildPingApi(url: string): SubsonicAPI | null {
+  const { username, password, legacyAuth } = authStore.getState();
+  if (!username || !password) return null;
+  return new SubsonicAPI({
+    url: normalizeServerUrl(url),
+    auth: { username, password },
+    legacyAuth,
+    reuseSalt: true,
+    crypto: reactNativeCrypto,
+    clientName: 'substreamer8',
+    clientVersion: '1.15.0',
+  });
+}
+
 export type { AlbumID3, AlbumInfo, AlbumWithSongsID3, ArtistID3, ArtistInfo2, ArtistWithAlbumsID3, Child, Genre, Playlist, PlaylistWithSongs, ScanStatus, Share };
 
 // ------------------------------------------------------------------ //
