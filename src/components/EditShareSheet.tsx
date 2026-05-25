@@ -130,7 +130,10 @@ export function EditShareSheet() {
     return t('share');
   }, [share, t]);
 
-  const coverArtId = share?.entry?.[0]?.coverArt;
+  // Entity-ID based cover art (see src/utils/coverArtId.ts).
+  // Share's first entry is a song-level Child; key off its album.
+  const firstEntry = share?.entry?.[0];
+  const coverArtId = firstEntry ? (firstEntry.albumId ?? firstEntry.id) : undefined;
 
   return (
     <BottomSheet visible={visible} onClose={handleClose}>

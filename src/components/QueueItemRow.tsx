@@ -121,7 +121,7 @@ export const QueueItemRow = memo(function QueueItemRow({
         {/* Cover art with now-playing overlay */}
         <View style={styles.coverWrap}>
           <CachedImage
-            coverArtId={track.coverArt}
+            coverArtId={track.albumId ?? track.id}
             size={50}
             style={styles.cover}
             resizeMode="cover"

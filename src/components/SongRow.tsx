@@ -88,7 +88,7 @@ export const SongRow = memo(function SongRow({ song, onPress }: { song: Child; o
     >
       <View style={styles.row}>
         <View style={styles.coverWrap}>
-          <CachedImage coverArtId={song.coverArt} size={COVER_SIZE} style={styles.cover} resizeMode="cover" />
+          <CachedImage coverArtId={song.albumId ?? song.id} size={COVER_SIZE} style={styles.cover} resizeMode="cover" />
           {isActive && (
             <View style={styles.activeOverlay}>
               <NowPlayingIndicator size={26} color={colors.primary} />

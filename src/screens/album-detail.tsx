@@ -99,7 +99,7 @@ export function AlbumDetailScreen() {
   }, [id]);
 
   const { primary, secondary, gradientOpacity } = useImagePalette(
-    isWide ? SKIP_COLOR_EXTRACTION : album?.coverArt,
+    isWide ? SKIP_COLOR_EXTRACTION : album?.id,
   );
 
   const themeGradientColors = useMemo(() => {
@@ -155,8 +155,8 @@ export function AlbumDetailScreen() {
       const data = await fetchAlbum(id);
       setAlbum(data);
       if (!data) setError(t('albumNotFound'));
-      if (isRefresh && data?.coverArt) {
-        refreshCachedImage(data.coverArt, 'album-detail-pull').catch(() => { /* non-critical */ });
+      if (isRefresh && data?.id) {
+        refreshCachedImage(data.id, 'album-detail-pull').catch(() => { /* non-critical */ });
       }
       await delay;
     } catch (e) {
@@ -254,7 +254,7 @@ export function AlbumDetailScreen() {
         <View style={styles.hero}>
           <View style={styles.heroImageWrap}>
             <CachedImage
-              coverArtId={album.coverArt}
+              coverArtId={album.id}
               size={HERO_COVER_SIZE}
               style={styles.heroImage}
               resizeMode="contain"

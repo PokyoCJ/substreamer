@@ -109,7 +109,7 @@ export function ExpandedPlayerView({
   // lightness-clamped for the active theme so the previous manual
   // darkening call is no longer necessary — we just use the hook output.
   const { primary, secondary, gradientOpacity: extractedGradientOpacity } =
-    useImagePalette(currentTrack?.coverArt);
+    useImagePalette(currentTrack ? (currentTrack.albumId ?? currentTrack.id) : undefined);
 
   // 2-stop diagonal gradient: extracted secondary (prefer) → a
   // slightly-darkened theme background. We drop the more-vibrant
@@ -378,7 +378,7 @@ export function ExpandedPlayerView({
                     ]}
                   >
                     <CachedImage
-                      coverArtId={currentTrack.coverArt}
+                      coverArtId={currentTrack.albumId ?? currentTrack.id}
                       size={HERO_COVER_SIZE}
                       style={styles.coverImage}
                       resizeMode="cover"

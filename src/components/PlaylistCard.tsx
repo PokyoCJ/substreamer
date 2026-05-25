@@ -37,7 +37,7 @@ export const PlaylistCard = memo(function PlaylistCard({
       <View style={[styles.card, { backgroundColor: colors.card }, width != null && { width }]}>
         <View style={styles.imageContainer}>
           <CachedImage
-            coverArtId={playlist.coverArt}
+            coverArtId={playlist.id}
             size={COVER_SIZE}
             style={styles.cover}
             resizeMode="cover"

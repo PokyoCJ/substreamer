@@ -386,7 +386,7 @@ const PanelHeader = memo(function PanelHeader({
           <View style={styles.coverSection}>
             <View style={styles.coverWrap}>
               <CachedImage
-                coverArtId={currentTrack.coverArt}
+                coverArtId={currentTrack.albumId ?? currentTrack.id}
                 size={COVER_SIZE}
                 style={styles.coverImage}
                 resizeMode="cover"

@@ -110,7 +110,7 @@ export function PlayerView() {
     }
   }, [currentTrack, wasPopulated, onClose]);
 
-  const { primary, secondary, gradientOpacity } = useImagePalette(currentTrack?.coverArt);
+  const { primary, secondary, gradientOpacity } = useImagePalette(currentTrack ? (currentTrack.albumId ?? currentTrack.id) : undefined);
 
   // 2-stop gradient: extracted secondary (prefer) → theme background. We
   // drop the more-vibrant `primary` from the render here because on small
@@ -601,7 +601,7 @@ const PlayerContent = memo(function PlayerContent({
       <View style={styles.hero}>
         <View style={[styles.heroImageWrap, { width: heroSize, height: heroSize }]}>
           <CachedImage
-            coverArtId={currentTrack.coverArt}
+            coverArtId={currentTrack.albumId ?? currentTrack.id}
             size={HERO_COVER_SIZE}
             style={styles.heroImage}
             resizeMode="cover"

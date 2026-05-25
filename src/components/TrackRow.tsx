@@ -123,7 +123,7 @@ export const TrackRow = memo(function TrackRow({ track, trackNumber, colors, onP
         {showCoverArt ? (
           <View style={styles.coverWrap}>
             <CachedImage
-              coverArtId={track.coverArt}
+              coverArtId={track.albumId ?? track.id}
               size={COVER_SIZE}
               style={styles.cover}
               resizeMode="cover"

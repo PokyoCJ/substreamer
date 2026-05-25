@@ -261,13 +261,15 @@ describe('image-queue meta accessors', () => {
 
 describe('enqueueImageRefreshCycle', () => {
   it('refresh-downloads snapshots from cached_items + per-song covers', async () => {
+    // Snapshot now keys off ENTITY IDs (itemId for cached_items,
+    // albumId for cached_songs), not the server-supplied .coverArt field.
     mockHydrateCachedItems.mockReturnValue({
-      'a-1': { type: 'album', coverArtId: 'cov-album-1' },
-      'pl-1': { type: 'playlist', coverArtId: 'cov-playlist-1' },
+      'a-1': { itemId: 'a-1', type: 'album' },
+      'pl-1': { itemId: 'pl-1', type: 'playlist' },
     });
     mockHydrateCachedSongs.mockReturnValue({
-      's-1': { coverArt: 'cov-song-1' },
-      's-2': { coverArt: 'cov-album-1' }, // dedups with album
+      's-1': { id: 's-1', albumId: 'a-2' },
+      's-2': { id: 's-2', albumId: 'a-1' }, // dedups with cached_items album
     });
 
     const cycleId = await enqueueImageRefreshCycle('refresh-downloads');
@@ -275,7 +277,7 @@ describe('enqueueImageRefreshCycle', () => {
     expect(cycleId).not.toBeNull();
     expect(mockEnqueueBulk).toHaveBeenCalledTimes(1);
     const [ids, scope] = mockEnqueueBulk.mock.calls[0];
-    expect(ids).toEqual(['cov-album-1', 'cov-playlist-1', 'cov-song-1']);
+    expect(ids).toEqual(['a-1', 'pl-1', 'a-2']);
     expect(scope).toBe('refresh-downloads');
     const meta = getImageQueueCycle();
     expect(meta.cycleId).toBe(cycleId);

@@ -54,7 +54,7 @@ export function MiniPlayer() {
 
   // --- Colour extraction (palette is theme-aware; primary is lightness-clamped
   // for safe icon contrast, secondary is null for monochromatic covers). ---
-  const { primary, secondary, gradientOpacity } = useImagePalette(currentTrack?.coverArt);
+  const { primary, secondary, gradientOpacity } = useImagePalette(currentTrack ? (currentTrack.albumId ?? currentTrack.id) : undefined);
 
   const gradientAnimatedStyle = useAnimatedStyle(() => ({
     opacity: gradientOpacity.value,
@@ -125,7 +125,7 @@ export function MiniPlayer() {
           </View>
         ) : (
           <CachedImage
-            coverArtId={currentTrack.coverArt}
+            coverArtId={currentTrack.albumId ?? currentTrack.id}
             size={300}
             style={styles.cover}
             resizeMode="cover"

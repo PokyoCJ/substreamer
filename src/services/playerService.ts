@@ -154,13 +154,18 @@ function childToTrack(child: Child): Track | null {
   const url = localUri ?? getStreamUrl(child.id);
   if (!url) return null;
 
-  const cachedArt = getCachedImageUri(child.coverArt ?? '', 600);
+  // Cover-art lookup keys off the parent album's ID (see
+  // src/utils/coverArtId.ts) so every track in an album shares one
+  // cached file — fixes the MiniPlayer / lock-screen placeholder
+  // problem caused by Navidrome-style per-track coverArt variants.
+  const coverArtId = child.albumId ?? child.id;
+  const cachedArt = getCachedImageUri(coverArtId, 600);
   const contentType = localUri ? mimeFromUri(localUri) : undefined;
   // In offline mode drop any server-only artwork so RNTP's lock-screen
   // artwork fetch can't hit the network either. (`getCoverArtUrl` also
   // returns null under offline mode now; this is belt-and-braces.)
   const artwork = cachedArt
-    ?? (offline ? undefined : getCoverArtUrl(child.coverArt ?? '', 600) ?? undefined);
+    ?? (offline ? undefined : getCoverArtUrl(coverArtId, 600) ?? undefined);
 
   return {
     id: child.id,

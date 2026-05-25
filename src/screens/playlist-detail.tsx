@@ -102,7 +102,7 @@ const EditTrackRow = memo(function EditTrackRow({
     >
       <View style={[styles.editRow, { borderBottomColor: colors.border }]}>
         <CachedImage
-          coverArtId={item.coverArt}
+          coverArtId={item.albumId ?? item.id}
           size={300}
           style={styles.editCover}
           resizeMode="cover"
@@ -153,7 +153,7 @@ export function PlaylistDetailScreen() {
   const [saving, setSaving] = useState(false);
 
   const { primary, secondary, gradientOpacity } = useImagePalette(
-    isWide ? SKIP_COLOR_EXTRACTION : playlist?.coverArt,
+    isWide ? SKIP_COLOR_EXTRACTION : playlist?.id,
   );
 
   const themeGradientColors = useMemo(() => {
@@ -181,8 +181,8 @@ export function PlaylistDetailScreen() {
       const data = await fetchPlaylist(id);
       setPlaylist(data);
       if (!data) setError(t('playlistNotFound'));
-      if (isRefresh && data?.coverArt) {
-        refreshCachedImage(data.coverArt, 'playlist-detail-pull').catch(() => { /* non-critical */ });
+      if (isRefresh && data?.id) {
+        refreshCachedImage(data.id, 'playlist-detail-pull').catch(() => { /* non-critical */ });
       }
       await delay;
     } catch (e) {
@@ -252,8 +252,8 @@ export function PlaylistDetailScreen() {
       }
 
       const fresh = await fetchPlaylist(id);
-      if (fresh?.coverArt) {
-        await cacheAllSizes(fresh.coverArt);
+      if (fresh?.id) {
+        await cacheAllSizes(fresh.id);
       }
       if (fresh) setPlaylist(fresh);
 
@@ -389,7 +389,7 @@ export function PlaylistDetailScreen() {
         <View style={styles.hero}>
           <View style={styles.heroImageWrap}>
             <CachedImage
-              coverArtId={playlist.coverArt}
+              coverArtId={playlist.id}
               size={HERO_COVER_SIZE}
               style={styles.heroImage}
               resizeMode="contain"

@@ -79,9 +79,9 @@ function ScrobbleRow({ song, time, onPress, showAlbumInSubtitle }: ScrobbleRowPr
 
   const content = (
     <>
-      {song.coverArt && (
+      {(song.albumId ?? song.id) && (
         <CachedImage
-          coverArtId={song.coverArt}
+          coverArtId={song.albumId ?? song.id}
           size={150}
           style={styles.recentThumb}
           resizeMode="cover"
@@ -343,7 +343,7 @@ export function MyListeningScreen() {
               subtitle={item.song.artist ?? undefined}
               count={item.count}
               maxCount={analytics.topSongs[0].count}
-              coverArtId={item.song.coverArt ?? undefined}
+              coverArtId={item.song.albumId ?? item.song.id}
               colors={colors}
               index={i}
               onPress={onPlaySong(item.song)}
@@ -384,7 +384,7 @@ export function MyListeningScreen() {
               subtitle={item.artist}
               count={item.count}
               maxCount={analytics.topAlbums[0].count}
-              coverArtId={item.coverArt}
+              coverArtId={item.albumId ?? item.coverArt}
               colors={colors}
               index={i}
               onPress={onOpenAlbum(item.albumId)}

@@ -139,8 +139,8 @@ export function TrackDetailsModal({ track, visible, onClose }: TrackDetailsModal
   return (
     <BottomSheet visible={visible} onClose={onClose} maxHeight="60%">
       <View style={styles.header}>
-        {track.coverArt && (
-          <CachedImage coverArtId={track.coverArt} size={150} style={styles.coverArt} resizeMode="cover" />
+        {(track.albumId ?? track.id) && (
+          <CachedImage coverArtId={track.albumId ?? track.id} size={150} style={styles.coverArt} resizeMode="cover" />
         )}
         <View style={styles.headerText}>
           <Text style={[styles.title, { color: colors.textPrimary }]}>

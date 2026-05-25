@@ -77,7 +77,7 @@ function CompactArtistRow({
       onPress={onPress}
       style={({ pressed }) => [styles.compactRow, pressed && styles.pressed]}
     >
-      <CachedImage coverArtId={artist.coverArt} size={COVER_SIZE} style={styles.compactCoverCircle} resizeMode="cover" />
+      <CachedImage coverArtId={artist.id} size={COVER_SIZE} style={styles.compactCoverCircle} resizeMode="cover" />
       <View style={styles.compactText}>
         <Text style={[styles.compactPrimary, { color: colors.textPrimary }]} numberOfLines={1}>
           {artist.name}
@@ -106,7 +106,7 @@ function CompactAlbumRow({
       onPress={onPress}
       style={({ pressed }) => [styles.compactRow, pressed && styles.pressed]}
     >
-      <CachedImage coverArtId={album.coverArt} size={COVER_SIZE} style={styles.compactCover} resizeMode="cover" />
+      <CachedImage coverArtId={album.id} size={COVER_SIZE} style={styles.compactCover} resizeMode="cover" />
       <View style={styles.compactText}>
         <Text style={[styles.compactPrimary, { color: colors.textPrimary }]} numberOfLines={1}>
           {album.name}
@@ -135,7 +135,7 @@ function CompactSongRow({
       onPress={onPress}
       style={({ pressed }) => [styles.compactRow, pressed && styles.pressed]}
     >
-      <CachedImage coverArtId={song.coverArt} size={COVER_SIZE} style={styles.compactCover} resizeMode="cover" />
+      <CachedImage coverArtId={song.albumId ?? song.id} size={COVER_SIZE} style={styles.compactCover} resizeMode="cover" />
       <View style={styles.compactText}>
         <Text style={[styles.compactPrimary, { color: colors.textPrimary }]} numberOfLines={1}>
           {song.title}

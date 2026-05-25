@@ -404,7 +404,7 @@ const JumpBackInItem = memo(function JumpBackInItem({
   return (
     <Pressable onPress={handlePress} style={styles.jumpItem}>
       <CachedImage
-        coverArtId={album.coverArt}
+        coverArtId={album.id}
         size={JUMP_BACK_IN_SIZE}
         style={styles.jumpImage}
         resizeMode="cover"

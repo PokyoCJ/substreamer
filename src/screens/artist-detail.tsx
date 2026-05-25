@@ -107,7 +107,7 @@ export function ArtistDetailScreen() {
   const refreshControlKey = useRefreshControlKey();
 
   const { primary, secondary, gradientOpacity } = useImagePalette(
-    isWide ? SKIP_COLOR_EXTRACTION : artist?.coverArt,
+    isWide ? SKIP_COLOR_EXTRACTION : artist?.id,
   );
 
   const themeGradientColors = useMemo(() => {
@@ -181,8 +181,8 @@ export function ArtistDetailScreen() {
         setArtistInfo(entry.artistInfo);
         setTopSongs(entry.topSongs);
         setBiography(entry.biography);
-        if (isRefresh && entry.artist.coverArt) {
-          refreshCachedImage(entry.artist.coverArt, 'artist-detail-pull').catch(() => { /* non-critical */ });
+        if (isRefresh && entry.artist.id) {
+          refreshCachedImage(entry.artist.id, 'artist-detail-pull').catch(() => { /* non-critical */ });
         }
       }
       await delay;
@@ -284,7 +284,7 @@ export function ArtistDetailScreen() {
         {/* ---- Hero ---- */}
         <View style={styles.hero}>
           <CachedImage
-            coverArtId={artist.coverArt}
+            coverArtId={artist.id}
             size={HERO_COVER_SIZE}
             fallbackUri={artistInfo?.largeImageUrl ?? undefined}
             style={[styles.heroImage, { width: heroImageSize, height: heroImageSize, borderRadius: heroImageSize / 2 }]}

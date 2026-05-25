@@ -1594,33 +1594,38 @@ export function cacheEntityCoverArt(entities: Array<{ coverArt?: string }>): voi
  * persistent image-download queue's `refresh-downloads` scope. Broken
  * out so it can be mocked in unit tests without dragging in the entire
  * `musicCacheTables` import surface.
+ *
+ * Keys off ENTITY IDs (album.id, playlist.id, song.albumId), not the
+ * server-supplied `coverArt` field — see src/utils/coverArtId.ts.
+ * Same ID scheme that every consumer (CachedImage, childToTrack, etc.)
+ * uses, so the recached files match what callers will look up.
  */
 function hydrateCachedItemsForRecache(): {
   items: Array<{ type: string; coverArtId: string | null }>;
   /**
-   * Per-song cover-art IDs from `cached_songs`. Needed because songs
-   * inside downloaded playlists carry cover-art IDs that don't appear
-   * anywhere in `cached_items` (the playlist row has its own curated
-   * cover; the source albums weren't downloaded). Without this list
-   * the recache pass leaves every track row in a downloaded playlist
-   * showing a placeholder.
+   * Per-song cover-art IDs from `cached_songs`. Each song's cover key
+   * is its parent album's ID (fallback to song.id for orphans) so
+   * multiple tracks in the same album share one cached file.
    */
   songCoverArtIds: string[];
 } {
   // Lazy-required: keeps the recache worker testable without forcing
   // every test that touches imageCacheService to mock musicCacheTables.
   const { hydrateCachedItems, hydrateCachedSongs } = require('../store/persistence/musicCacheTables') as {
-    hydrateCachedItems: () => Record<string, { type: string; coverArtId?: string | null }>;
-    hydrateCachedSongs: () => Record<string, { coverArt?: string | null }>;
+    hydrateCachedItems: () => Record<string, { itemId: string; type: string }>;
+    hydrateCachedSongs: () => Record<string, { id: string; albumId?: string | null }>;
   };
   const items = Object.values(hydrateCachedItems()).map((r) => ({
     type: r.type,
-    coverArtId: r.coverArtId ?? null,
+    coverArtId: r.itemId,
   }));
   const songCoverArtIds: string[] = [];
+  const seen = new Set<string>();
   for (const s of Object.values(hydrateCachedSongs())) {
-    const id = s.coverArt;
-    if (typeof id === 'string' && id.length > 0) songCoverArtIds.push(id);
+    const id = s.albumId ?? s.id;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    songCoverArtIds.push(id);
   }
   return { items, songCoverArtIds };
 }

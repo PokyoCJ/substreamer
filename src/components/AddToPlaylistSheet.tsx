@@ -59,9 +59,11 @@ async function resolveSongIds(target: AddToPlaylistTarget): Promise<string[] | n
 }
 
 function getTargetCoverArt(target: AddToPlaylistTarget): string | undefined {
-  if (target.type === 'song') return target.item.coverArt;
-  if (target.type === 'album') return target.item.coverArt;
-  return target.songs[0]?.coverArt;
+  // Entity-ID-based cover art (see src/utils/coverArtId.ts).
+  if (target.type === 'song') return target.item.albumId ?? target.item.id;
+  if (target.type === 'album') return target.item.id;
+  const first = target.songs[0];
+  return first ? (first.albumId ?? first.id) : undefined;
 }
 
 function getSubtitleText(target: AddToPlaylistTarget, t: (key: string, options?: Record<string, unknown>) => string): string {
