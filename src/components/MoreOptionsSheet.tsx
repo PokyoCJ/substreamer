@@ -36,6 +36,7 @@ import {
   playMoreByArtist,
   playMoreLikeThis,
   playSimilarArtistsMix,
+  playSongNextInQueue,
   removeDownload,
   saveArtistTopSongsPlaylist,
   songItemId,
@@ -339,6 +340,16 @@ export function MoreOptionsSheet() {
     }
   }, [entity, handleClose]);
 
+  const handlePlayNext = useCallback(async () => {
+    if (!entity || entity.type !== 'song') return;
+    handleClose();
+    try {
+      await playSongNextInQueue(entity.item as Child);
+    } catch {
+      // Silently fail — failure mode is handled via the offline toast inside playSongNext.
+    }
+  }, [entity, handleClose]);
+
   const handleGoToArtist = useCallback(() => {
     if (!entity) return;
     handleClose();
@@ -565,6 +576,10 @@ export function MoreOptionsSheet() {
   const showAddToPlaylist = !offline && canAddToPlaylist(entity);
   const showAddQueueToPlaylist = !offline && isPlayerSource;
   const showAddToQueue = !isPlayerSource && canAddToQueue(entity);
+  // Play Next is song-only; shown wherever Add to Queue is shown so the
+  // user gets both "play right after current" and "play at end of queue"
+  // affordances side-by-side.
+  const showPlayNext = !isPlayerSource && entity?.type === 'song';
   const showPlayMoreLikeThis = !offline && canPlayMoreLikeThis(entity);
   const showDetails = hasAlbumDetails(entity);
   const showTrackDetails = hasTrackDetails(entity);
@@ -591,7 +606,7 @@ export function MoreOptionsSheet() {
 
   const hasAnyOption =
     starrable || showRating || showAddToPlaylist || showAddQueueToPlaylist ||
-    showAddToQueue || showPlayMoreLikeThis || showPlaySimilarArtistsMix ||
+    showAddToQueue || showPlayNext || showPlayMoreLikeThis || showPlaySimilarArtistsMix ||
     showPlayMoreByArtist || showDownload || showDownloadSong || showRemoveSongDownload ||
     showAlbumLink || showArtistLink || showShare || showDetails || showTrackDetails || showDelete ||
     showSaveTopSongsPlaylist || showSetMbid || showScrobbleExclusion;
@@ -816,6 +831,27 @@ export function MoreOptionsSheet() {
                   />
                   <Text style={[styles.optionLabel, { color: colors.textPrimary }]}>
                     {t('playMoreByThisArtist')}
+                  </Text>
+                </Pressable>
+              )}
+
+              {/* Play Next (songs only) — insert immediately after current */}
+              {showPlayNext && (
+                <Pressable
+                  onPress={handlePlayNext}
+                  style={({ pressed }) => [
+                    styles.option,
+                    pressed && styles.optionPressed,
+                  ]}
+                >
+                  <MaterialCommunityIcons
+                    name="playlist-music-outline"
+                    size={22}
+                    color={colors.textPrimary}
+                    style={styles.optionIcon}
+                  />
+                  <Text style={[styles.optionLabel, { color: colors.textPrimary }]}>
+                    {t('playNext')}
                   </Text>
                 </Pressable>
               )}
@@ -1301,6 +1337,27 @@ export function MoreOptionsSheet() {
                   />
                   <Text style={[styles.optionLabel, { color: colors.textPrimary }]}>
                     {t('playMoreByThisArtist')}
+                  </Text>
+                </Pressable>
+              )}
+
+              {/* Play Next (songs only) — insert immediately after current */}
+              {showPlayNext && (
+                <Pressable
+                  onPress={handlePlayNext}
+                  style={({ pressed }) => [
+                    styles.option,
+                    pressed && styles.optionPressed,
+                  ]}
+                >
+                  <MaterialCommunityIcons
+                    name="playlist-music-outline"
+                    size={22}
+                    color={colors.textPrimary}
+                    style={styles.optionIcon}
+                  />
+                  <Text style={[styles.optionLabel, { color: colors.textPrimary }]}>
+                    {t('playNext')}
                   </Text>
                 </Pressable>
               )}

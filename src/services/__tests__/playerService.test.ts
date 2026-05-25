@@ -206,6 +206,7 @@ import {
   canSkipToNext,
   canSkipToPrevious,
   applyLocalPlayToPlayer,
+  playSongNext,
   rebuildQueueForServerSwitch,
 } from '../playerService';
 import { getCoverArtUrl, getStreamUrl, type Child } from '../subsonicService';
@@ -629,6 +630,100 @@ describe('rebuildQueueForServerSwitch', () => {
 
     // Clamped to last valid index (queue length - 1).
     expect(mockTP.skip).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('playSongNext', () => {
+  it('starts fresh playback when queue is empty', async () => {
+    await initPlayer();
+    mockTP.reset.mockClear();
+    mockTP.add.mockClear();
+    mockTP.play.mockClear();
+
+    const song = makeChild('new-song');
+    await playSongNext(song);
+
+    // Empty queue → falls through to playTrack: reset + add + play.
+    expect(mockTP.reset).toHaveBeenCalled();
+    expect(mockTP.add).toHaveBeenCalled();
+    expect(mockTP.play).toHaveBeenCalled();
+    const addedTracks = mockTP.add.mock.calls[0][0];
+    expect(addedTracks).toHaveLength(1);
+    expect(addedTracks[0].id).toBe('new-song');
+  });
+
+  it('inserts at currentIndex + 1 when queue has tracks', async () => {
+    await initPlayer();
+    const queue = [makeChild('a'), makeChild('b'), makeChild('c')];
+    await playTrack(queue[1], queue); // current index = 1
+
+    mockTP.add.mockClear();
+    mockSetQueue.mockClear();
+
+    const { playerStore } = require('../../store/playerStore');
+    (playerStore.getState as jest.Mock).mockReturnValue({
+      ...defaultPlayerState(),
+      currentTrackIndex: 1,
+      queue,
+    });
+
+    const newSong = makeChild('inserted');
+    await playSongNext(newSong);
+
+    // Inserted before index 2 (= currentIndex 1 + 1) so it plays right after current.
+    expect(mockTP.add).toHaveBeenCalledTimes(1);
+    expect(mockTP.add.mock.calls[0][0]).toHaveLength(1);
+    expect(mockTP.add.mock.calls[0][0][0].id).toBe('inserted');
+    expect(mockTP.add.mock.calls[0][1]).toBe(2);
+
+    // Local queue mirror: ['a', 'b', 'inserted', 'c']
+    const updatedQueue = mockSetQueue.mock.calls[mockSetQueue.mock.calls.length - 1][0];
+    expect(updatedQueue.map((c: Child) => c.id)).toEqual(['a', 'b', 'inserted', 'c']);
+  });
+
+  it('inserts at the end when current track is the last one', async () => {
+    await initPlayer();
+    const queue = [makeChild('only')];
+    await playTrack(queue[0], queue); // current index = 0, queue length = 1
+
+    mockTP.add.mockClear();
+
+    const { playerStore } = require('../../store/playerStore');
+    (playerStore.getState as jest.Mock).mockReturnValue({
+      ...defaultPlayerState(),
+      currentTrackIndex: 0,
+      queue,
+    });
+
+    const newSong = makeChild('after');
+    await playSongNext(newSong);
+
+    // insertBeforeIndex = min(0 + 1, 1) = 1 (i.e. append at end).
+    expect(mockTP.add.mock.calls[0][1]).toBe(1);
+  });
+
+  it('does not call TrackPlayer.reset (current playback continues)', async () => {
+    await initPlayer();
+    const queue = [makeChild('a'), makeChild('b')];
+    await playTrack(queue[0], queue);
+
+    mockTP.reset.mockClear();
+    mockTP.skip.mockClear();
+    mockTP.play.mockClear();
+
+    const { playerStore } = require('../../store/playerStore');
+    (playerStore.getState as jest.Mock).mockReturnValue({
+      ...defaultPlayerState(),
+      currentTrackIndex: 0,
+      queue,
+    });
+
+    await playSongNext(makeChild('next'));
+
+    // Critical: current playback is undisturbed — no reset, no skip, no play call.
+    expect(mockTP.reset).not.toHaveBeenCalled();
+    expect(mockTP.skip).not.toHaveBeenCalled();
+    expect(mockTP.play).not.toHaveBeenCalled();
   });
 });
 

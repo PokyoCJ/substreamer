@@ -1528,6 +1528,52 @@ export async function addToQueue(
 }
 
 /**
+ * Insert a single song into the queue immediately after the current
+ * track, so it plays next once the current track ends (or skip-next is
+ * pressed). When the queue is empty, behaves like `playTrack` — starts
+ * fresh playback with this song.
+ *
+ * Offline mode: if the song isn't playable on the current network
+ * state, the existing "no offline tracks" toast surfaces and the queue
+ * is left untouched.
+ */
+export async function playSongNext(song: Child): Promise<void> {
+  await awaitHydration();
+
+  // Empty queue → start fresh playback, same as addToQueue's first-track path.
+  if (currentChildQueue.length === 0) {
+    await playTrack(song, [song]);
+    return;
+  }
+
+  await waitForTrackMapsReady();
+  await ensureCoverArtAuth();
+
+  const { rnTracks, filteredQueue: playable } = buildPlayableQueue([song]);
+  if (rnTracks.length === 0) {
+    playbackToastStore.getState().fail(i18n.t('noOfflineTracksInQueue'));
+    return;
+  }
+
+  const currentIndex = playerStore.getState().currentTrackIndex ?? 0;
+  const insertBefore = Math.min(currentIndex + 1, currentChildQueue.length);
+
+  // RNTP `add(tracks, insertBeforeIndex)` inserts BEFORE the given index;
+  // currentIndex + 1 means "place right after the currently playing track".
+  await TrackPlayer.add(rnTracks, insertBefore);
+
+  for (const child of playable) {
+    playerStore.getState().addQueueFormat(child.id, stampQueueFormat(child));
+  }
+
+  const newQueue = [...currentChildQueue];
+  newQueue.splice(insertBefore, 0, ...playable);
+  currentChildQueue = newQueue;
+  playerStore.getState().setQueue(currentChildQueue);
+  persistQueue(currentChildQueue, currentIndex);
+}
+
+/**
  * Remove a track from the play queue by its index.
  *
  * Handles the edge case where the removed track is the currently playing

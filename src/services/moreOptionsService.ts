@@ -20,7 +20,7 @@ import {
   deleteCachedItem as deleteCachedItemService,
   enqueueSongDownload as enqueueSongDownloadService,
 } from './musicCacheService';
-import { addToQueue, playTrack, removeFromQueue } from './playerService';
+import { addToQueue, playSongNext, playTrack, removeFromQueue } from './playerService';
 import {
   createNewPlaylist,
   getAlbum,
@@ -115,6 +115,15 @@ export async function toggleStar(
  */
 export async function addSongToQueue(song: Child): Promise<void> {
   await addToQueue([song]);
+}
+
+/**
+ * Insert a single song right after the currently-playing track so it
+ * plays next without disturbing what's playing now. Falls back to
+ * starting fresh playback when the queue is empty.
+ */
+export async function playSongNextInQueue(song: Child): Promise<void> {
+  await playSongNext(song);
 }
 
 /**
