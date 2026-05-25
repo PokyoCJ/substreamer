@@ -206,6 +206,7 @@ import {
   canSkipToNext,
   canSkipToPrevious,
   applyLocalPlayToPlayer,
+  rebuildQueueForServerSwitch,
 } from '../playerService';
 import { getCoverArtUrl, getStreamUrl, type Child } from '../subsonicService';
 
@@ -528,6 +529,106 @@ describe('clearQueue', () => {
     expect(mockSetCurrentTrack).toHaveBeenCalledWith(null);
     expect(mockSetQueue).toHaveBeenCalledWith([]);
     expect(mockClearPersistedQueue).toHaveBeenCalled();
+  });
+});
+
+describe('rebuildQueueForServerSwitch', () => {
+  // The function is meant to be called immediately after authStore.serverUrl
+  // is swapped to a new value. childToTrack reads serverUrl per-call (mocked
+  // here via getStreamUrl), so the regenerated tracks pick up whatever URL
+  // the mock returns at the time of the rebuild.
+
+  it('no-ops when the queue is empty', async () => {
+    await initPlayer();
+    mockTP.reset.mockClear();
+    mockTP.add.mockClear();
+    // No tracks have been queued — module-level currentChildQueue is empty.
+
+    await rebuildQueueForServerSwitch();
+
+    expect(mockTP.reset).not.toHaveBeenCalled();
+    expect(mockTP.add).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds with new URLs, preserves index + position, resumes playback', async () => {
+    await initPlayer();
+    const queue = [makeChild('t1'), makeChild('t2'), makeChild('t3')];
+    await playTrack(queue[1], queue);
+
+    // playTrack already exercised reset/add/skip/play — clear so we can
+    // assert the rebuild's own calls cleanly.
+    mockTP.reset.mockClear();
+    mockTP.add.mockClear();
+    mockTP.skip.mockClear();
+    mockTP.play.mockClear();
+    mockTP.seekTo.mockClear();
+    mockSetQueue.mockClear();
+
+    // Pretend we're 42 seconds into track index 1, currently playing.
+    mockTP.getProgress.mockResolvedValueOnce({ position: 42, duration: 200, buffered: 60 });
+    const { playerStore } = require('../../store/playerStore');
+    (playerStore.getState as jest.Mock).mockReturnValue({
+      ...defaultPlayerState(),
+      currentTrackIndex: 1,
+      playbackState: 'playing',
+      queue,
+    });
+    // Switch the mocked stream URL to simulate the auth swap.
+    (getStreamUrl as jest.Mock).mockImplementation((id: string) => `https://secondary.example.com/stream/${id}`);
+
+    await rebuildQueueForServerSwitch();
+
+    expect(mockTP.pause).toHaveBeenCalled();
+    expect(mockTP.reset).toHaveBeenCalledTimes(1);
+    expect(mockTP.add).toHaveBeenCalledTimes(1);
+    const addedTracks = mockTP.add.mock.calls[0][0];
+    expect(addedTracks).toHaveLength(3);
+    expect(addedTracks[1].url).toBe('https://secondary.example.com/stream/t2');
+    expect(mockTP.skip).toHaveBeenCalledWith(1);
+    expect(mockTP.seekTo).toHaveBeenCalledWith(42);
+    expect(mockTP.play).toHaveBeenCalledTimes(1);
+    expect(mockSetQueue).toHaveBeenCalledWith(queue);
+  });
+
+  it('does not resume play when the queue was paused', async () => {
+    await initPlayer();
+    const queue = [makeChild('t1')];
+    await playTrack(queue[0], queue);
+
+    mockTP.play.mockClear();
+    mockTP.getProgress.mockResolvedValueOnce({ position: 5, duration: 200, buffered: 30 });
+    const { playerStore } = require('../../store/playerStore');
+    (playerStore.getState as jest.Mock).mockReturnValue({
+      ...defaultPlayerState(),
+      currentTrackIndex: 0,
+      playbackState: 'paused',
+      queue,
+    });
+
+    await rebuildQueueForServerSwitch();
+
+    expect(mockTP.play).not.toHaveBeenCalled();
+  });
+
+  it('clamps an out-of-range stored index to the rebuilt queue length', async () => {
+    await initPlayer();
+    const queue = [makeChild('t1'), makeChild('t2')];
+    await playTrack(queue[0], queue);
+
+    mockTP.skip.mockClear();
+    mockTP.getProgress.mockResolvedValueOnce({ position: 0, duration: 200, buffered: 0 });
+    const { playerStore } = require('../../store/playerStore');
+    (playerStore.getState as jest.Mock).mockReturnValue({
+      ...defaultPlayerState(),
+      currentTrackIndex: 99, // wildly stale index
+      playbackState: 'idle',
+      queue,
+    });
+
+    await rebuildQueueForServerSwitch();
+
+    // Clamped to last valid index (queue length - 1).
+    expect(mockTP.skip).toHaveBeenCalledWith(1);
   });
 });
 

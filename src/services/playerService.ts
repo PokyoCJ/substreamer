@@ -1411,6 +1411,76 @@ export async function clearQueue(): Promise<void> {
 }
 
 /**
+ * Rebuild the RNTP queue in-place using the current Child[] queue. The
+ * stream and artwork URLs are regenerated from whatever `authStore.serverUrl`
+ * now points at, so this is the right hammer immediately after a
+ * primary/secondary server switch — every queued track gets URLs that
+ * resolve against the new base.
+ *
+ * Strategy: full queue replacement (pause → reset → add → skip → seek →
+ * play). The brief audio interruption is acceptable per design — the
+ * alternative ("keep current track playing on the old URL, replace only
+ * the rest") needs per-track RNTP surgery that doesn't compose with our
+ * scrobble / position bookkeeping, and the user explicitly preferred
+ * simple-and-predictable over seamless.
+ *
+ * No-op when the queue is empty. Downloaded tracks keep playing from
+ * local files because `childToTrack` already prefers `localUri` over
+ * `getStreamUrl`.
+ */
+export async function rebuildQueueForServerSwitch(): Promise<void> {
+  await awaitHydration();
+  const queue = currentChildQueue;
+  if (queue.length === 0) return;
+
+  const idx = playerStore.getState().currentTrackIndex ?? 0;
+  let position = 0;
+  try {
+    const progress = await TrackPlayer.getProgress();
+    position = progress.position;
+  } catch {
+    // Pre-init or no active track — start the rebuilt queue at zero.
+  }
+  const wasPlaying = playerStore.getState().playbackState === 'playing';
+
+  isSettingQueue = true;
+  try {
+    try {
+      await TrackPlayer.pause();
+    } catch {
+      // RNTP may not be ready yet; the reset below handles it.
+    }
+
+    const { rnTracks, filteredQueue } = buildPlayableQueue(queue);
+    if (rnTracks.length === 0) {
+      // Every track in the queue was filtered out (e.g. all offline-only
+      // and we just switched to a server URL that doesn't have them).
+      // Leave the queue alone — caller's switch is best-effort and the
+      // user can manually reload content.
+      return;
+    }
+
+    const safeIdx = Math.min(Math.max(0, idx), rnTracks.length - 1);
+
+    await TrackPlayer.reset();
+    await TrackPlayer.add(rnTracks);
+    await TrackPlayer.skip(safeIdx);
+    if (position > 0) {
+      await TrackPlayer.seekTo(position);
+    }
+    if (wasPlaying) {
+      await TrackPlayer.play();
+    }
+
+    currentChildQueue = filteredQueue;
+    playerStore.getState().setQueue(filteredQueue);
+    persistQueue(filteredQueue, safeIdx);
+  } finally {
+    isSettingQueue = false;
+  }
+}
+
+/**
  * Append one or more tracks to the end of the current play queue.
  *
  * If the queue is empty (nothing loaded), this starts playback from the
