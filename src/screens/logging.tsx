@@ -21,7 +21,7 @@ const DIAG_LOG_FILE = new File(Paths.document, 'audio-diagnostics.log');
 const REMOTE_LOG_FILE = new File(Paths.document, 'remote-control-diagnostics.log');
 const IMAGE_LOG_FILE = new File(Paths.document, IMAGE_CACHE_DIAG_LOG_FILE);
 
-export function MigrationLogScreen() {
+export function LoggingScreen() {
   const { colors } = useTheme();
   const { t } = useTranslation();
   const headerHeight = useContext(HeaderHeightContext) ?? 0;

@@ -36,7 +36,7 @@ const SETTINGS_LINKS: {
 
 const DEV_SETTINGS_LINKS: typeof SETTINGS_LINKS = [
   { route: '/file-explorer', labelKey: 'fileExplorer', subtitleKey: 'fileExplorerSubtitle', icon: 'document-text-outline' },
-  { route: '/migration-log', labelKey: 'logging', subtitleKey: 'loggingSubtitle', icon: 'list-outline' },
+  { route: '/logging', labelKey: 'logging', subtitleKey: 'loggingSubtitle', icon: 'list-outline' },
 ];
 
 const TAP_WINDOW_MS = 3000;

@@ -713,7 +713,7 @@ export default function RootLayout() {
           options={{ ...blurHeaderOptions, title: '', headerBackTitle: i18n.t('back') }}
         />
         <Stack.Screen
-          name="migration-log"
+          name="logging"
           options={{ ...blurHeaderOptions, title: i18n.t('logging'), headerBackTitle: i18n.t('back') }}
         />
             </Stack>
