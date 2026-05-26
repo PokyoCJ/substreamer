@@ -33,7 +33,6 @@ import { ShuffleButton } from './ShuffleButton';
 import { SkipIntervalButton } from './SkipIntervalButton';
 import { SleepTimerButton } from './SleepTimerButton';
 import { SleepTimerCapsule } from './SleepTimerCapsule';
-import { ThemedAlert } from './ThemedAlert';
 import { closeOpenRow } from './SwipeableRow';
 import { type ThemeColors } from '../constants/theme';
 import { useCanSkip } from '../hooks/useCanSkip';
@@ -67,7 +66,7 @@ const PADDING = 16;
 export function PlayerPanel() {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { alert, alertProps } = useThemedAlert();
+  const { alert } = useThemedAlert();
   const insets = useSafeAreaInsets();
   const queueContentContainerStyle = useMemo(
     () => ({ paddingBottom: insets.bottom + 16 }),
@@ -274,7 +273,6 @@ export function PlayerPanel() {
           </View>
         </Animated.View>
       )}
-      <ThemedAlert {...alertProps} />
     </GradientBackground>
   );
 }

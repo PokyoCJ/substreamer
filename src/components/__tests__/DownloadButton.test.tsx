@@ -21,7 +21,6 @@ jest.mock('../../services/musicCacheService', () => ({
 jest.mock('../../hooks/useConfirmAlbumRemoval', () => ({
   useConfirmAlbumRemoval: () => ({
     confirmRemove: (...a: unknown[]) => (mockConfirmRemove as any)(...a),
-    alertProps: { visible: false, title: '', buttons: [], onDismiss: () => {}, colors: {} },
   }),
 }));
 

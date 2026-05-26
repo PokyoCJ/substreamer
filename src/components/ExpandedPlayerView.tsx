@@ -39,7 +39,6 @@ import { ShuffleButton } from './ShuffleButton';
 import { SkipIntervalButton } from './SkipIntervalButton';
 import { SleepTimerButton } from './SleepTimerButton';
 import { SleepTimerCapsule } from './SleepTimerCapsule';
-import { ThemedAlert } from './ThemedAlert';
 import { closeOpenRow } from './SwipeableRow';
 import { useCanSkip } from '../hooks/useCanSkip';
 import { useImagePalette } from '../hooks/useImagePalette';
@@ -83,7 +82,7 @@ export function ExpandedPlayerView({
 }: ExpandedPlayerViewProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { alert, alertProps } = useThemedAlert();
+  const { alert } = useThemedAlert();
   const insets = useSafeAreaInsets();
   const currentTrack = playerStore((s) => s.currentTrack);
   const currentTrackIndex = playerStore((s) => s.currentTrackIndex);
@@ -670,7 +669,6 @@ export function ExpandedPlayerView({
             </View>
           </Animated.View>
         )}
-        <ThemedAlert {...alertProps} />
       </View>
     </Animated.View>
   );

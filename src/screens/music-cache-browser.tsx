@@ -383,8 +383,8 @@ export function MusicCacheBrowserScreen() {
   const { colors } = useTheme();
   const { t } = useTranslation();
   const navigation = useNavigation();
-  const { alert, alertProps } = useThemedAlert();
-  const { confirmRemove, alertProps: removalAlertProps } = useConfirmAlbumRemoval();
+  const { alert } = useThemedAlert();
+  const { confirmRemove } = useConfirmAlbumRemoval();
   const transitionComplete = useTransitionComplete();
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
   const cachedItems = musicCacheStore((s) => s.cachedItems);
@@ -635,8 +635,6 @@ export function MusicCacheBrowserScreen() {
       </View>
       <BottomChrome withSafeAreaPadding />
     </GradientBackground>
-    <ThemedAlert {...alertProps} />
-    <ThemedAlert {...removalAlertProps} />
     </>
   );
 }

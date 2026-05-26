@@ -35,7 +35,7 @@ import { getCertificateInfo, type CertificateInfo } from '../../modules/expo-ssl
 export function SettingsConnectivityScreen() {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { alert, alertProps } = useThemedAlert();
+  const { alert } = useThemedAlert();
   const navigation = useNavigation();
   const router = useRouter();
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
@@ -939,7 +939,6 @@ export function SettingsConnectivityScreen() {
       onCancel={handleCancelCert}
     />
 
-    <ThemedAlert {...alertProps} />
     </>
   );
 }

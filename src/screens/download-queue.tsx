@@ -245,7 +245,7 @@ const QueueRow = memo(function QueueRow({
 export function DownloadQueueScreen() {
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const { alert, alertProps } = useThemedAlert();
+  const { alert } = useThemedAlert();
   const navigation = useNavigation();
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
   const insets = useSafeAreaInsets();
@@ -433,7 +433,6 @@ export function DownloadQueueScreen() {
         style={styles.container}
         contentContainerStyle={contentStyle}
       />
-      <ThemedAlert {...alertProps} />
     </GradientBackground>
   );
 }

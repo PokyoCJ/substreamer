@@ -7,7 +7,6 @@ import { useTranslation } from 'react-i18next';
 import { CachedImage } from './CachedImage';
 import { RowMetaLine } from './RowMetaLine';
 import { closeOpenRow, SwipeableRow, type SwipeAction } from './SwipeableRow';
-import { ThemedAlert } from './ThemedAlert';
 import { useDownloadStatus } from '../hooks/useDownloadStatus';
 import { useTheme } from '../hooks/useTheme';
 import { useThemedAlert } from '../hooks/useThemedAlert';
@@ -27,7 +26,7 @@ export const PlaylistRow = memo(function PlaylistRow({ playlist }: { playlist: P
   const { colors } = useTheme();
   const { t } = useTranslation();
   const router = useRouter();
-  const { alert, alertProps } = useThemedAlert();
+  const { alert } = useThemedAlert();
   const downloadStatus = useDownloadStatus('playlist', playlist.id);
 
   const onPress = useCallback(() => {
@@ -90,52 +89,49 @@ export const PlaylistRow = memo(function PlaylistRow({ playlist }: { playlist: P
   );
 
   return (
-    <>
-      <SwipeableRow
-        rightActions={rightActions}
-        leftActions={leftActions}
-        enableFullSwipeRight
-        enableFullSwipeLeft
-        rowGap={8}
-        onLongPress={handleLongPress}
-        onPress={onPress}
-      >
-        <View style={styles.row}>
-          <CachedImage coverArtId={playlist.id} size={COVER_SIZE} style={styles.cover} resizeMode="cover" />
-          <View style={styles.text}>
-            <Text
-              style={[styles.playlistName, { color: colors.textPrimary }]}
-              numberOfLines={1}
-            >
-              {playlist.name}
-            </Text>
-            <View style={styles.meta}>
-              <RowMetaLine
-                leading={
-                  <>
-                    <Ionicons name="musical-notes-outline" size={14} color={colors.primary} />
-                    <Text
-                      style={[styles.metaText, { color: colors.textSecondary }]}
-                      numberOfLines={1}
-                    >
-                      {t('trackCount', { count: playlist.songCount })}
-                    </Text>
-                  </>
-                }
-                slots={['download', 'heart', 'duration']}
-                downloadStatus={
-                  downloadStatus === 'complete' || downloadStatus === 'partial'
-                    ? downloadStatus
-                    : 'none'
-                }
-                durationText={formatCompactDuration(playlist.duration)}
-              />
-            </View>
+    <SwipeableRow
+      rightActions={rightActions}
+      leftActions={leftActions}
+      enableFullSwipeRight
+      enableFullSwipeLeft
+      rowGap={8}
+      onLongPress={handleLongPress}
+      onPress={onPress}
+    >
+      <View style={styles.row}>
+        <CachedImage coverArtId={playlist.id} size={COVER_SIZE} style={styles.cover} resizeMode="cover" />
+        <View style={styles.text}>
+          <Text
+            style={[styles.playlistName, { color: colors.textPrimary }]}
+            numberOfLines={1}
+          >
+            {playlist.name}
+          </Text>
+          <View style={styles.meta}>
+            <RowMetaLine
+              leading={
+                <>
+                  <Ionicons name="musical-notes-outline" size={14} color={colors.primary} />
+                  <Text
+                    style={[styles.metaText, { color: colors.textSecondary }]}
+                    numberOfLines={1}
+                  >
+                    {t('trackCount', { count: playlist.songCount })}
+                  </Text>
+                </>
+              }
+              slots={['download', 'heart', 'duration']}
+              downloadStatus={
+                downloadStatus === 'complete' || downloadStatus === 'partial'
+                  ? downloadStatus
+                  : 'none'
+              }
+              durationText={formatCompactDuration(playlist.duration)}
+            />
           </View>
         </View>
-      </SwipeableRow>
-      <ThemedAlert {...alertProps} />
-    </>
+      </View>
+    </SwipeableRow>
   );
 });
 

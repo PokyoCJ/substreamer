@@ -88,7 +88,7 @@ const QUEUE_CONTENT_CONTAINER_STYLE = { paddingBottom: 12 } as const;
 export function PlayerView() {
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const { alert, alertProps } = useThemedAlert();
+  const { alert } = useThemedAlert();
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const router = useRouter();
@@ -481,7 +481,6 @@ export function PlayerView() {
           </Animated.View>
         )}
       </View>
-      <ThemedAlert {...alertProps} />
     </>
   );
 }

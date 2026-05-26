@@ -14,7 +14,6 @@ import { InfoRow } from '../components/InfoRow';
 import { BottomChrome } from '../components/BottomChrome';
 import { useTheme } from '../hooks/useTheme';
 import { useThemedAlert } from '../hooks/useThemedAlert';
-import { ThemedAlert } from '../components/ThemedAlert';
 import { clearImageCache } from '../services/imageCacheService';
 import { clearMusicCache } from '../services/musicCacheService';
 import { clearQueue } from '../services/playerService';
@@ -37,7 +36,7 @@ export function SettingsServerScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const { alert, alertProps } = useThemedAlert();
+  const { alert } = useThemedAlert();
   const insets = useSafeAreaInsets();
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
   const serverUrl = authStore((s) => s.serverUrl);
@@ -954,8 +953,6 @@ export function SettingsServerScreen() {
         </Pressable>
       </View>
     </BottomSheet>
-
-    <ThemedAlert {...alertProps} />
     </>
   );
 }

@@ -4,7 +4,6 @@ import { ActivityIndicator, Pressable, StyleSheet } from 'react-native';
 
 import { CircularProgress } from './CircularProgress';
 import { DownloadedIcon } from './DownloadedIcon';
-import { ThemedAlert } from './ThemedAlert';
 import { useConfirmAlbumRemoval } from '../hooks/useConfirmAlbumRemoval';
 import { useDownloadStatus } from '../hooks/useDownloadStatus';
 import { useTheme } from '../hooks/useTheme';
@@ -35,7 +34,7 @@ export const DownloadButton = memo(function DownloadButton({
 }: DownloadButtonProps) {
   const { colors } = useTheme();
   const downloadStatus = useDownloadStatus(type, itemId);
-  const { confirmRemove, alertProps } = useConfirmAlbumRemoval();
+  const { confirmRemove } = useConfirmAlbumRemoval();
 
   const downloadProgress = musicCacheStore((s) => {
     if (!itemId) return 0;
@@ -120,7 +119,6 @@ export const DownloadButton = memo(function DownloadButton({
           />
         )}
       </Pressable>
-      <ThemedAlert {...alertProps} />
     </>
   );
 });

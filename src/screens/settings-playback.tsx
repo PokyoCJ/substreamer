@@ -48,7 +48,7 @@ const REMOTE_OPTIONS: { value: RemoteControlMode; labelKey: string; subtitleKey:
 export function SettingsPlaybackScreen() {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { alert, alertProps } = useThemedAlert();
+  const { alert } = useThemedAlert();
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
 
   const [bitrateOpen, setBitrateOpen] = useState(false);
@@ -489,7 +489,6 @@ export function SettingsPlaybackScreen() {
         </ScrollView>
         <BottomChrome withSafeAreaPadding />
       </GradientBackground>
-      <ThemedAlert {...alertProps} />
       <StreamFormatSheet />
     </>
   );

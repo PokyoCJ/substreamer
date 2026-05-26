@@ -53,7 +53,7 @@ export function SettingsStorageScreen() {
   const { t } = useTranslation();
   const router = useRouter();
   const { colors } = useTheme();
-  const { alert, alertProps } = useThemedAlert();
+  const { alert } = useThemedAlert();
   const insets = useSafeAreaInsets();
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
   const [concurrentSheetVisible, setConcurrentSheetVisible] = useState(false);
@@ -858,7 +858,6 @@ export function SettingsStorageScreen() {
       </View>
     </Modal>
 
-    <ThemedAlert {...alertProps} />
     </>
   );
 }

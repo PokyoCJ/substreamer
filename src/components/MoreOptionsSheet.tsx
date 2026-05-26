@@ -15,7 +15,6 @@ import { AlbumDetailsModal } from './AlbumDetailsModal';
 import { BottomSheet } from './BottomSheet';
 import { TrackDetailsModal } from './TrackDetailsModal';
 import { CachedImage } from './CachedImage';
-import { ThemedAlert } from './ThemedAlert';
 import { useConfirmAlbumRemoval } from '../hooks/useConfirmAlbumRemoval';
 import { useThemedAlert } from '../hooks/useThemedAlert';
 import { StarRatingDisplay } from './StarRating';
@@ -224,8 +223,8 @@ export function MoreOptionsSheet() {
 
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const { alert, alertProps } = useThemedAlert();
-  const { confirmRemove, alertProps: removalAlertProps } = useConfirmAlbumRemoval();
+  const { alert } = useThemedAlert();
+  const { confirmRemove } = useConfirmAlbumRemoval();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -1681,8 +1680,6 @@ export function MoreOptionsSheet() {
           }}
         />
       )}
-      <ThemedAlert {...alertProps} />
-      <ThemedAlert {...removalAlertProps} />
     </>
   );
 }

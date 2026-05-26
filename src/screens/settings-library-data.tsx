@@ -27,7 +27,6 @@ import { GradientBackground } from '../components/GradientBackground';
 import { BottomChrome } from '../components/BottomChrome';
 import { useTheme } from '../hooks/useTheme';
 import { useThemedAlert } from '../hooks/useThemedAlert';
-import { ThemedAlert } from '../components/ThemedAlert';
 import {
   createBackup,
   listBackups,
@@ -102,7 +101,7 @@ export function SettingsLibraryDataScreen() {
   const { t } = useTranslation();
   const router = useRouter();
   const { colors } = useTheme();
-  const { alert, alertProps } = useThemedAlert();
+  const { alert } = useThemedAlert();
   const insets = useSafeAreaInsets();
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
   // --- Library sync state ---
@@ -1034,8 +1033,6 @@ export function SettingsLibraryDataScreen() {
         </View>
       </View>
     </Modal>
-
-    <ThemedAlert {...alertProps} />
     </>
   );
 }

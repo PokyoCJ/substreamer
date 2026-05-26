@@ -10,10 +10,9 @@ import {
 import { musicCacheStore } from '../store/musicCacheStore';
 
 /**
- * Returns `{ confirmRemove, alertProps }`. Callers must render
- * `<ThemedAlert {...alertProps} />` so the Android confirmation modal can
- * mount. On iOS the native `Alert.alert` is used, but `alertProps` is still
- * returned (spreads are a no-op when `visible` is `false`).
+ * Returns `{ confirmRemove }`. Android confirmation modals mount via the
+ * root-level `ThemedAlertHost`, so callers no longer need to render their
+ * own `<ThemedAlert>`.
  *
  * `confirmRemove(itemId)` behaviour:
  * - Non-album items → pass straight through to `deleteCachedItem`.
@@ -24,7 +23,7 @@ import { musicCacheStore } from '../store/musicCacheStore';
  *   edges (and its original `downloadedAt`), so the UI shows it as partial.
  */
 export function useConfirmAlbumRemoval() {
-  const { alert, alertProps } = useThemedAlert();
+  const { alert } = useThemedAlert();
   const { t } = useTranslation();
 
   const confirmRemove = useCallback(
@@ -65,5 +64,5 @@ export function useConfirmAlbumRemoval() {
     [alert, t],
   );
 
-  return { confirmRemove, alertProps };
+  return { confirmRemove };
 }

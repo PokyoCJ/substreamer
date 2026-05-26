@@ -193,7 +193,7 @@ const MetadataRow = memo(function MetadataRow({
 export function MetadataCacheBrowserScreen() {
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const { alert, alertProps } = useThemedAlert();
+  const { alert } = useThemedAlert();
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
   const refreshControlKey = useRefreshControlKey();
   const [entries, setEntries] = useState<MetadataEntry[]>(() => buildEntries());
@@ -376,7 +376,6 @@ export function MetadataCacheBrowserScreen() {
       />
       <BottomChrome withSafeAreaPadding />
     </GradientBackground>
-    <ThemedAlert {...alertProps} />
     </>
   );
 }

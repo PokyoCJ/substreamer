@@ -150,7 +150,7 @@ export function ImageCacheBrowserScreen() {
   const { colors } = useTheme();
   const { t } = useTranslation();
   const navigation = useNavigation();
-  const { alert, alertProps } = useThemedAlert();
+  const { alert } = useThemedAlert();
   const transitionComplete = useTransitionComplete();
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
   const refreshControlKey = useRefreshControlKey();
@@ -432,7 +432,6 @@ export function ImageCacheBrowserScreen() {
       </View>
       <BottomChrome withSafeAreaPadding />
     </GradientBackground>
-    <ThemedAlert {...alertProps} />
     </>
   );
 }

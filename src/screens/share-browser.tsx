@@ -32,7 +32,6 @@ import { BottomChrome } from '../components/BottomChrome';
 import { useRefreshControlKey } from '../hooks/useRefreshControlKey';
 import { useTheme } from '../hooks/useTheme';
 import { useThemedAlert } from '../hooks/useThemedAlert';
-import { ThemedAlert } from '../components/ThemedAlert';
 import { type Share as SubsonicShare } from '../services/subsonicService';
 import { editShareStore } from '../store/editShareStore';
 import { rewriteShareUrl } from '../store/shareSettingsStore';
@@ -88,7 +87,7 @@ function getShareSubtitle(share: SubsonicShare, t: (key: string, options?: Recor
 export function ShareBrowserScreen() {
   const { t } = useTranslation();
   const { colors } = useTheme();
-  const { alert, alertProps } = useThemedAlert();
+  const { alert } = useThemedAlert();
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
   const refreshControlKey = useRefreshControlKey();
 
@@ -362,7 +361,6 @@ export function ShareBrowserScreen() {
     </GradientBackground>
 
     <EditShareSheet />
-    <ThemedAlert {...alertProps} />
     </>
   );
 }

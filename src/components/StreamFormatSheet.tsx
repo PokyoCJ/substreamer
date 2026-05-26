@@ -4,7 +4,6 @@ import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } fr
 import { useTranslation } from 'react-i18next';
 
 import { BottomSheet } from './BottomSheet';
-import { ThemedAlert } from './ThemedAlert';
 import { useTheme } from '../hooks/useTheme';
 import { useThemedAlert } from '../hooks/useThemedAlert';
 import {
@@ -37,7 +36,7 @@ export function StreamFormatSheet() {
 
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const { alert, alertProps } = useThemedAlert();
+  const { alert } = useThemedAlert();
 
   const currentValue = target === 'stream' ? streamFormat : downloadFormat;
   const currentPreset = findPreset(currentValue);
@@ -261,7 +260,6 @@ export function StreamFormatSheet() {
           </View>
         )}
       </BottomSheet>
-      <ThemedAlert {...alertProps} />
     </>
   );
 }
