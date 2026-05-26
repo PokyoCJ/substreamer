@@ -351,7 +351,13 @@ describe('CachedImage', () => {
     mockGetCachedImageUri.mockReturnValue(null);
     let resolveRetryCache: (() => void) | null = null;
     mockCacheAllSizes
+      // The mount-time fetch (queueMicrotask) fires first — let it resolve.
       .mockResolvedValueOnce(undefined)
+      // Debounce fetch — also resolves.
+      .mockResolvedValueOnce(undefined)
+      // Retry fetch — deferred so the test can control resolution after the
+      // second error fires, simulating the real cacheAllSizes-lands-after-
+      // errors race.
       .mockImplementationOnce(
         () => new Promise<void>((resolve) => {
           resolveRetryCache = resolve;
@@ -575,9 +581,14 @@ describe('CachedImage', () => {
     mockGetCachedImageUri.mockReturnValueOnce(null).mockReturnValueOnce(null);
 
     let resolveCache: () => void;
-    mockCacheAllSizes.mockImplementationOnce(
-      () => new Promise<void>((r) => { resolveCache = r; }),
-    );
+    // The mount-time fetch fires first — let it resolve. The deferred
+    // resolver is wired to the debounced call so the test can control
+    // when reloadNonce gets bumped.
+    mockCacheAllSizes
+      .mockResolvedValueOnce(undefined)
+      .mockImplementationOnce(
+        () => new Promise<void>((r) => { resolveCache = r; }),
+      );
 
     const { toJSON, UNSAFE_root } = render(<CachedImage coverArtId="late-land" size={50} />);
     await flushEffects();

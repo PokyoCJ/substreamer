@@ -225,6 +225,36 @@ export const CachedImage = memo(function CachedImage({
     // retry recovery; they must not clear the retry's remoteUri.
   }, [coverArtId, size, fallbackUri, fadeAnim]);
 
+  /* ---- mount-time fetch (bypasses debounce churn) ------------------- */
+  // FlashList's initial measurement pass commonly mount → unmount → remount
+  // the same cell within tens of ms, especially in horizontal nested lists.
+  // Each cycle restarts the debounced fetch timer, so if the cycles are
+  // faster than DEBOUNCE_MS the timer never fires until layout stabilises
+  // (which the user perceives as "cards stay on placeholder until I
+  // scroll"). Fire cacheAllSizes immediately when the cell sees a
+  // coverArtId without a cached file — the image-service dedups concurrent
+  // calls for the same id, so a flurry of mounts produces ONE download.
+  useEffect(() => {
+    if (!coverArtId) return;
+    if (offlineModeStore.getState().offlineMode) return;
+    // Defer to next tick so the cell's first paint isn't blocked by an
+    // immediate Promise/JS-thread spike when many cells mount at once.
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled || currentIdRef.current !== coverArtId) return;
+      if (getCachedImageUri(coverArtId, size) != null) return;
+      cacheAllSizes(coverArtId)
+        .then(() => {
+          if (cancelled || currentIdRef.current !== coverArtId) return;
+          if (getCachedImageUri(coverArtId, size) != null) {
+            setReloadNonce((n) => n + 1);
+          }
+        })
+        .catch(() => { /* non-critical */ });
+    });
+    return () => { cancelled = true; };
+  }, [coverArtId, size]);
+
   /* ---- debounced remote fetch for cache misses --------------------- */
   useEffect(() => {
     if (!coverArtId) return;
