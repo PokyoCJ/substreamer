@@ -36,6 +36,7 @@ import { failoverStatusStore, type SwitchCause } from '../store/failoverStatusSt
 import { setConnectivityRestoredHook, setServerDownHook } from './connectivityService';
 import { rebuildQueueForServerSwitch } from './playerService';
 import { buildPingApi, clearApiCache } from './subsonicService';
+import { withTimeout } from '../utils/withTimeout';
 
 const PING_TIMEOUT_MS = 5_000;
 const RECOVERY_POLL_INTERVAL_MS = 60_000;
@@ -116,7 +117,8 @@ export async function pingUrl(
   const api = buildPingApi(url);
   if (!api) return false;
   try {
-    const response = await withTimeout(api.ping(), timeoutMs);
+    const response = await withTimeout(() => api.ping(), timeoutMs);
+    if (response === 'timeout') return false;
     return response.status === 'ok';
   } catch {
     return false;
@@ -293,18 +295,3 @@ async function runRecoveryCheck(): Promise<void> {
   await switchToServer('primary', 'auto');
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Ping timeout')), ms);
-    promise.then(
-      (val) => {
-        clearTimeout(timer);
-        resolve(val);
-      },
-      (err) => {
-        clearTimeout(timer);
-        reject(err);
-      },
-    );
-  });
-}
