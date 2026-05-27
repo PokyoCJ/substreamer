@@ -1,4 +1,4 @@
-name: Android Build
+name: Android Release Build
 
 on:
   workflow_dispatch:
@@ -27,14 +27,14 @@ jobs:
       - name: Expo prebuild
         run: npx expo prebuild --platform android
 
-      - name: Build APK
+      - name: Build Release APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleRelease
 
-      - name: Upload APK
+      - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: substreamer-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: substreamer-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
