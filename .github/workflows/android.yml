@@ -11,30 +11,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-
       - name: Install dependencies
         run: npm install
 
-      - name: Grant Gradle permission
-        run: chmod +x android/gradlew
+      - name: Install Expo/EAS
+        run: npm install -g eas-cli
 
-      - name: Build Debug APK
+      - name: Expo prebuild
+        run: npx expo prebuild --platform android
+
+      - name: Build APK
         run: |
           cd android
+          chmod +x gradlew
           ./gradlew assembleDebug
 
       - name: Upload APK
